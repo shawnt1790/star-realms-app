@@ -6,10 +6,10 @@
   ],
   "scripts": {
     "dev": "npm -ws run dev",
-    "build": "npm -ws run build",
+    "build": "npm -w @sr/shared run build && npm -w @sr/server run build && npm -w @sr/client run build",
     "test": "npm -ws run test",
     "lint": "eslint .",
-    "typecheck": "npm -ws run typecheck",
+    "typecheck": "npm -w @sr/shared run typecheck && npm -w @sr/server run typecheck && npm -w @sr/client run typecheck",
     "format": "prettier . --write",
     "format:check": "prettier . --check"
   },
