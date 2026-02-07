@@ -12,18 +12,26 @@ app.use(cors());
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
+
+const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
+type Player = {
+  playerId: string;
+  name: string;
+  socketId: string | null;
+  connected: boolean;
+};
+
 type Room = {
   code: RoomCode;
   status: "lobby" | "in_game";
-  hostSocketId: string;
-  players: Map<string, { id: string; name: string; connected: boolean }>; // key: socket.id
+  hostPlayerId: string;
+  players: Map<string, Player>; // key: playerId
 };
 
 const rooms = new Map<RoomCode, Room>();
@@ -44,10 +52,10 @@ function createRoomCode(): RoomCode {
 }
 
 function emitRoomState(room: Room) {
-  const players = Array.from(room.players.entries()).map(([socketId, p]) => ({
-    id: p.id,
+  const players = Array.from(room.players.values()).map((p) => ({
+    id: p.playerId,
     name: p.name,
-    isHost: socketId === room.hostSocketId,
+    isHost: p.playerId === room.hostPlayerId,
     connected: p.connected,
   }));
 
@@ -60,53 +68,93 @@ function emitRoomState(room: Room) {
   io.to(room.code).emit("room:state", { room: state });
 }
 
-function findSocketRoomCode(socketRooms: Set<string>): RoomCode | null {
-  for (const r of socketRooms) {
-    // socket.rooms always includes socket.id; the “other” one is our game room code
-    if (r.length >= 4 && r !== Array.from(socketRooms)[0]) return r as RoomCode;
+function getSocketRoomCode(socketRooms: Set<string>, socketId: string): RoomCode | null {
+  const code = Array.from(socketRooms).find((r) => r !== socketId) as RoomCode | undefined;
+  return code ?? null;
+}
+
+function isHost(room: Room, playerId: string) {
+  return room.hostPlayerId === playerId;
+}
+
+function ensureHost(room: Room) {
+  if (room.players.size === 0) return;
+
+  // if current host still exists, do nothing
+  if (room.players.has(room.hostPlayerId)) return;
+
+  // otherwise pick the first remaining player
+  const next = room.players.values().next().value as Player | undefined;
+  if (next) room.hostPlayerId = next.playerId;
+}
+
+function promoteHostIfHostDisconnected(room: Room, disconnectedPlayerId: string) {
+  if (room.hostPlayerId !== disconnectedPlayerId) return;
+
+  // Prefer a connected replacement
+  const connectedAlt = Array.from(room.players.values()).find(
+    (p) => p.playerId !== disconnectedPlayerId && p.connected,
+  );
+  if (connectedAlt) {
+    room.hostPlayerId = connectedAlt.playerId;
+    return;
   }
-  // safer way:
-  for (const r of socketRooms) {
-    if (r !== (r as unknown as string)) continue;
-  }
-  return null;
+
+  // Otherwise, any remaining player
+  ensureHost(room);
 }
 
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
-  socket.on("room:create", ({ name }, cb) => {
+  socket.on("room:create", ({ name, playerId }, cb) => {
     const clean = name.trim();
     if (!clean) return cb({ ok: false, error: "Name required" });
+    if (!playerId) return cb({ ok: false, error: "playerId required" });
 
     const code = createRoomCode();
 
     const room: Room = {
       code,
       status: "lobby",
-      hostSocketId: socket.id,
+      hostPlayerId: playerId,
       players: new Map(),
     };
 
-    room.players.set(socket.id, { id: socket.id, name: clean, connected: true });
-    rooms.set(code, room);
+    room.players.set(playerId, {
+      playerId,
+      name: clean,
+      socketId: socket.id,
+      connected: true,
+    });
 
+    rooms.set(code, room);
     socket.join(code);
     emitRoomState(room);
 
     cb({ ok: true, code });
   });
 
-  socket.on("room:join", ({ code, name }, cb) => {
+  socket.on("room:join", ({ code, name, playerId }, cb) => {
     const room = rooms.get(code);
     if (!room) return cb({ ok: false, error: "Room not found" });
     if (room.status !== "lobby") return cb({ ok: false, error: "Room already started" });
-    if (room.players.size >= 2) return cb({ ok: false, error: "Room full (2 players MVP)" });
 
     const clean = name.trim();
     if (!clean) return cb({ ok: false, error: "Name required" });
+    if (!playerId) return cb({ ok: false, error: "playerId required" });
 
-    room.players.set(socket.id, { id: socket.id, name: clean, connected: true });
+    // MVP: 2 players max, but allow re-join if same playerId
+    if (!room.players.has(playerId) && room.players.size >= 2) {
+      return cb({ ok: false, error: "Room full (2 players MVP)" });
+    }
+
+    room.players.set(playerId, {
+      playerId,
+      name: clean,
+      socketId: socket.id,
+      connected: true,
+    });
 
     socket.join(code);
     emitRoomState(room);
@@ -114,29 +162,33 @@ io.on("connection", (socket) => {
     cb({ ok: true });
   });
 
-  socket.on("room:leave", (cb) => {
-    // Find room code by checking which rooms the socket is in (excluding its own id)
-    const code = Array.from(socket.rooms).find((r) => r !== socket.id) as RoomCode | undefined;
-    if (!code) {
-      cb();
-      return;
-    }
+  socket.on("room:reconnect", ({ code, playerId }, cb) => {
+    const room = rooms.get(code);
+    if (!room) return cb({ ok: false, error: "Room not found" });
+
+    const p = room.players.get(playerId);
+    if (!p) return cb({ ok: false, error: "Player not in room" });
+
+    p.socketId = socket.id;
+    p.connected = true;
+
+    socket.join(code);
+    emitRoomState(room);
+
+    cb({ ok: true });
+  });
+
+  socket.on("room:leave", ({ playerId }, cb) => {
+    const code = getSocketRoomCode(socket.rooms, socket.id);
+    if (!code) return cb();
 
     const room = rooms.get(code);
-    if (!room) {
-      cb();
-      return;
-    }
+    if (!room) return cb();
 
-    room.players.delete(socket.id);
+    room.players.delete(playerId);
     socket.leave(code);
 
-    if (room.hostSocketId === socket.id) {
-      io.to(code).emit("error:toast", { message: "Host left. Room closed." });
-      rooms.delete(code);
-      cb();
-      return;
-    }
+    ensureHost(room);
 
     if (room.players.size === 0) rooms.delete(code);
     else emitRoomState(room);
@@ -144,23 +196,46 @@ io.on("connection", (socket) => {
     cb();
   });
 
+  socket.on("room:start", (cb) => {
+    const code = getSocketRoomCode(socket.rooms, socket.id);
+    if (!code) return cb({ ok: false, error: "Not in a room" });
+
+    const room = rooms.get(code);
+    if (!room) return cb({ ok: false, error: "Room not found" });
+
+    // identify player by socketId
+    const me = Array.from(room.players.values()).find((p) => p.socketId === socket.id) ?? null;
+    if (!me) return cb({ ok: false, error: "Player not in room" });
+
+    if (!isHost(room, me.playerId)) return cb({ ok: false, error: "Only the host can start" });
+    if (room.status !== "lobby") return cb({ ok: false, error: "Already started" });
+    if (room.players.size !== 2) return cb({ ok: false, error: "Need 2 players to start" });
+
+    room.status = "in_game";
+    emitRoomState(room);
+
+    cb({ ok: true });
+  });
+
   socket.on("disconnect", () => {
-    const code = Array.from(socket.rooms).find((r) => r !== socket.id) as RoomCode | undefined;
+    const code = getSocketRoomCode(socket.rooms, socket.id);
     if (!code) return;
 
     const room = rooms.get(code);
     if (!room) return;
 
-    room.players.delete(socket.id);
+    // find player by socketId
+    const player = Array.from(room.players.values()).find((p) => p.socketId === socket.id);
+    if (!player) return;
 
-    if (room.hostSocketId === socket.id) {
-      io.to(code).emit("error:toast", { message: "Host disconnected. Room closed." });
-      rooms.delete(code);
-      return;
-    }
+    player.connected = false;
+    player.socketId = null;
 
-    if (room.players.size === 0) rooms.delete(code);
-    else emitRoomState(room);
+    promoteHostIfHostDisconnected(room, player.playerId);
+    emitRoomState(room);
+
+    // Room is NOT deleted on disconnect; it closes only when everyone leaves (size==0).
+    // (Later you can add a cleanup timer to delete rooms that are fully disconnected for too long.)
   });
 });
 
