@@ -187,7 +187,11 @@ export default function App() {
               disabled={!amHost || room.players.length !== 2 || room.status !== "lobby"}
               style={{ padding: "8px 12px" }}
               title={
-                !amHost ? "Only host can start" : room.players.length !== 2 ? "Need 2 players" : "Start"
+                !amHost
+                  ? "Only host can start"
+                  : room.players.length !== 2
+                    ? "Need 2 players"
+                    : "Start"
               }
             >
               Start Game

@@ -26,9 +26,9 @@ export type ClientToServerEvents = {
 
   "room:reconnect": (
     payload: { code: RoomCode; playerId: string },
-    cb: (res: { ok: true } | { ok: false; error: string }) => void
+    cb: (res: { ok: true } | { ok: false; error: string }) => void,
   ) => void;
-  
+
   "room:leave": (payload: { playerId: string }, cb: () => void) => void;
 
   "room:start": (cb: (res: { ok: true } | { ok: false; error: string }) => void) => void;
