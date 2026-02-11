@@ -5,6 +5,7 @@ export type PlayerSummary = {
   name: string;
   isHost: boolean;
   connected: boolean;
+  ready: boolean;
 };
 
 export type RoomState = {
@@ -32,6 +33,11 @@ export type ClientToServerEvents = {
   "room:leave": (payload: { playerId: string }, cb: () => void) => void;
 
   "room:start": (cb: (res: { ok: true } | { ok: false; error: string }) => void) => void;
+
+  "room:ready": (
+  payload: { playerId: string; ready: boolean },
+  cb: (res: { ok: true } | { ok: false; error: string }) => void
+) => void;
 };
 
 export type ServerToClientEvents = {

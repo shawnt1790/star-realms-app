@@ -109,6 +109,17 @@ export default function App() {
   const me = room ? room.players.find((p) => p.id === playerId) : null;
   const amHost = Boolean(me?.isHost);
 
+  function toggleReady() {
+    if (!me) return;
+
+    socket.emit("room:ready", { playerId, ready: !me.ready }, (res) => {
+      if (!res.ok) setToast(res.error);
+    });
+  }
+
+  const bothReady =
+    room?.players.length === 2 && room.players.every((p) => p.ready && p.connected);
+
   return (
     <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 720 }}>
       <h1>Star Realms Online (MVP)</h1>
@@ -171,7 +182,11 @@ export default function App() {
             <ul>
               {room.players.map((p) => (
                 <li key={p.id}>
-                  {p.name} {p.isHost ? "(host)" : ""} {p.connected ? "" : "(disconnected)"}
+                  {p.name}
+                  {p.isHost ? " (host)" : ""}
+                  {!p.connected ? " (disconnected)" : ""}
+                  {" — "}
+                  {p.ready ? "✅ ready" : "❌ not ready"}
                 </li>
               ))}
             </ul>
@@ -182,15 +197,19 @@ export default function App() {
               Leave Room
             </button>
 
+            <button onClick={toggleReady} disabled={!me?.connected} style={{ padding: "8px 12px" }}>
+              {me?.ready ? "Unready" : "Ready"}
+            </button>
+
             <button
               onClick={startGame}
-              disabled={!amHost || room.players.length !== 2 || room.status !== "lobby"}
+              disabled={!amHost || !bothReady || room.status !== "lobby"}
               style={{ padding: "8px 12px" }}
               title={
                 !amHost
                   ? "Only host can start"
-                  : room.players.length !== 2
-                    ? "Need 2 players"
+                  : !bothReady
+                    ? "Both players must be ready"
                     : "Start"
               }
             >
