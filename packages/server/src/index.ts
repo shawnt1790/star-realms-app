@@ -25,6 +25,7 @@ type Player = {
   name: string;
   socketId: string | null;
   connected: boolean;
+  ready: boolean;
 };
 
 type Room = {
@@ -57,6 +58,7 @@ function emitRoomState(room: Room) {
     name: p.name,
     isHost: p.playerId === room.hostPlayerId,
     connected: p.connected,
+    ready: p.ready,
   }));
 
   const state: RoomState = {
@@ -126,6 +128,7 @@ io.on("connection", (socket) => {
       name: clean,
       socketId: socket.id,
       connected: true,
+      ready: false,
     });
 
     rooms.set(code, room);
@@ -154,6 +157,7 @@ io.on("connection", (socket) => {
       name: clean,
       socketId: socket.id,
       connected: true,
+      ready: false,
     });
 
     socket.join(code);
@@ -203,6 +207,9 @@ io.on("connection", (socket) => {
     const room = rooms.get(code);
     if (!room) return cb({ ok: false, error: "Room not found" });
 
+    const allReady = Array.from(room.players.values()).every((p) => p.ready);
+    if (!allReady) return cb({ ok: false, error: "Both players must be ready" });
+
     // identify player by socketId
     const me = Array.from(room.players.values()).find((p) => p.socketId === socket.id) ?? null;
     if (!me) return cb({ ok: false, error: "Player not in room" });
@@ -214,6 +221,25 @@ io.on("connection", (socket) => {
     room.status = "in_game";
     emitRoomState(room);
 
+    cb({ ok: true });
+  });
+
+  socket.on("room:ready", ({ playerId, ready }, cb) => {
+    const code = getSocketRoomCode(socket.rooms, socket.id);
+    if (!code) return cb({ ok: false, error: "Not in a room" });
+
+    const room = rooms.get(code);
+    if (!room) return cb({ ok: false, error: "Room not found" });
+    if (room.status !== "lobby") return cb({ ok: false, error: "Game already started" });
+
+    const p = room.players.get(playerId);
+    if (!p) return cb({ ok: false, error: "Player not found" });
+
+    // anti-cheat: only that player's current socket can change their ready
+    if (p.socketId !== socket.id) return cb({ ok: false, error: "Invalid player" });
+
+    p.ready = ready;
+    emitRoomState(room);
     cb({ ok: true });
   });
 
