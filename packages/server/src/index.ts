@@ -128,7 +128,7 @@ io.on("connection", (socket) => {
       name: clean,
       socketId: socket.id,
       connected: true,
-        ready: false,
+      ready: false,
     });
 
     rooms.set(code, room);
@@ -157,7 +157,7 @@ io.on("connection", (socket) => {
       name: clean,
       socketId: socket.id,
       connected: true,
-        ready: false,
+      ready: false,
     });
 
     socket.join(code);
@@ -241,8 +241,7 @@ io.on("connection", (socket) => {
     p.ready = ready;
     emitRoomState(room);
     cb({ ok: true });
-    });
-
+  });
 
   socket.on("disconnect", () => {
     const code = getSocketRoomCode(socket.rooms, socket.id);

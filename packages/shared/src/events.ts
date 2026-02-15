@@ -35,9 +35,9 @@ export type ClientToServerEvents = {
   "room:start": (cb: (res: { ok: true } | { ok: false; error: string }) => void) => void;
 
   "room:ready": (
-  payload: { playerId: string; ready: boolean },
-  cb: (res: { ok: true } | { ok: false; error: string }) => void
-) => void;
+    payload: { playerId: string; ready: boolean },
+    cb: (res: { ok: true } | { ok: false; error: string }) => void,
+  ) => void;
 };
 
 export type ServerToClientEvents = {

@@ -117,8 +117,7 @@ export default function App() {
     });
   }
 
-  const bothReady =
-    room?.players.length === 2 && room.players.every((p) => p.ready && p.connected);
+  const bothReady = room?.players.length === 2 && room.players.every((p) => p.ready && p.connected);
 
   return (
     <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", maxWidth: 720 }}>
