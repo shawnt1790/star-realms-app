@@ -10,6 +10,7 @@ const app = express();
 app.use(cors());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/", (_req, res) => res.send("StarRealms server is running. Try /health"));
 
 const httpServer = createServer(app);
 
