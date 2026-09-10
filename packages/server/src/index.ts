@@ -3,268 +3,106 @@ import cors from "cors";
 import "dotenv/config";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { existsSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-import type { ClientToServerEvents, ServerToClientEvents, RoomCode, RoomState } from "@sr/shared";
+import type { ClientToServerEvents, ServerToClientEvents } from "@sr/shared";
+import { RoomManager, cleanName } from "./rooms.js";
 
 const app = express();
 app.use(cors());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.send("StarRealms server is running. Try /health"));
-
 const httpServer = createServer(app);
 
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
-type Player = {
-  playerId: string;
-  name: string;
-  socketId: string | null;
-  connected: boolean;
-  ready: boolean;
-};
+const rooms = new RoomManager(io);
 
-type Room = {
-  code: RoomCode;
-  status: "lobby" | "in_game";
-  hostPlayerId: string;
-  players: Map<string, Player>; // key: playerId
-};
+app.get("/health", (_req, res) => res.json({ ok: true, ...rooms.stats() }));
 
-const rooms = new Map<RoomCode, Room>();
-
-function makeCode(len = 4): RoomCode {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let s = "";
-  for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return s;
-}
-
-function createRoomCode(): RoomCode {
-  for (let i = 0; i < 1000; i++) {
-    const code = makeCode(4);
-    if (!rooms.has(code)) return code;
-  }
-  return makeCode(6);
-}
-
-function emitRoomState(room: Room) {
-  const players = Array.from(room.players.values()).map((p) => ({
-    id: p.playerId,
-    name: p.name,
-    isHost: p.playerId === room.hostPlayerId,
-    connected: p.connected,
-    ready: p.ready,
-  }));
-
-  const state: RoomState = {
-    code: room.code,
-    status: room.status,
-    players,
-  };
-
-  io.to(room.code).emit("room:state", { room: state });
-}
-
-function getSocketRoomCode(socketRooms: Set<string>, socketId: string): RoomCode | null {
-  const code = Array.from(socketRooms).find((r) => r !== socketId) as RoomCode | undefined;
-  return code ?? null;
-}
-
-function isHost(room: Room, playerId: string) {
-  return room.hostPlayerId === playerId;
-}
-
-function ensureHost(room: Room) {
-  if (room.players.size === 0) return;
-
-  // if current host still exists, do nothing
-  if (room.players.has(room.hostPlayerId)) return;
-
-  // otherwise pick the first remaining player
-  const next = room.players.values().next().value as Player | undefined;
-  if (next) room.hostPlayerId = next.playerId;
-}
-
-function promoteHostIfHostDisconnected(room: Room, disconnectedPlayerId: string) {
-  if (room.hostPlayerId !== disconnectedPlayerId) return;
-
-  // Prefer a connected replacement
-  const connectedAlt = Array.from(room.players.values()).find(
-    (p) => p.playerId !== disconnectedPlayerId && p.connected,
-  );
-  if (connectedAlt) {
-    room.hostPlayerId = connectedAlt.playerId;
-    return;
-  }
-
-  // Otherwise, any remaining player
-  ensureHost(room);
+// Serve the built client when it exists (single-process deploys).
+const here = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.resolve(here, "../../client/dist");
+if (existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get(/^(?!\/socket\.io).*/, (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
+} else {
+  app.get("/", (_req, res) => res.send("StarRealms.io server is running. Try /health"));
 }
 
 io.on("connection", (socket) => {
-  console.log("socket connected:", socket.id);
-
-  socket.on("room:create", ({ name, playerId }, cb) => {
-    const clean = name.trim();
-    if (!clean) return cb({ ok: false, error: "Name required" });
-    if (!playerId) return cb({ ok: false, error: "playerId required" });
-
-    const code = createRoomCode();
-
-    const room: Room = {
-      code,
-      status: "lobby",
-      hostPlayerId: playerId,
-      players: new Map(),
-    };
-
-    room.players.set(playerId, {
-      playerId,
-      name: clean,
-      socketId: socket.id,
-      connected: true,
-      ready: false,
-    });
-
-    rooms.set(code, room);
-    socket.join(code);
-    emitRoomState(room);
-
-    cb({ ok: true, code });
+  socket.on("room:create", (payload, cb) => {
+    const name = cleanName(payload?.name);
+    const playerId = String(payload?.playerId ?? "");
+    if (!name) return cb({ ok: false, error: "Name required." });
+    if (!playerId) return cb({ ok: false, error: "playerId required." });
+    const mode = payload.mode === "solo" ? "solo" : "private";
+    const room = rooms.createRoom({ name, playerId, socketId: socket.id, mode });
+    cb({ ok: true, code: room.code });
   });
 
-  socket.on("room:join", ({ code, name, playerId }, cb) => {
-    const room = rooms.get(code);
-    if (!room) return cb({ ok: false, error: "Room not found" });
-    if (room.status !== "lobby") return cb({ ok: false, error: "Room already started" });
-
-    const clean = name.trim();
-    if (!clean) return cb({ ok: false, error: "Name required" });
-    if (!playerId) return cb({ ok: false, error: "playerId required" });
-
-    // MVP: 2 players max, but allow re-join if same playerId
-    if (!room.players.has(playerId) && room.players.size >= 2) {
-      return cb({ ok: false, error: "Room full (2 players MVP)" });
-    }
-
-    room.players.set(playerId, {
-      playerId,
-      name: clean,
-      socketId: socket.id,
-      connected: true,
-      ready: false,
-    });
-
-    socket.join(code);
-    emitRoomState(room);
-
-    cb({ ok: true });
+  socket.on("room:join", (payload, cb) => {
+    const name = cleanName(payload?.name);
+    const playerId = String(payload?.playerId ?? "");
+    const code = String(payload?.code ?? "")
+      .trim()
+      .toUpperCase();
+    if (!name) return cb({ ok: false, error: "Name required." });
+    if (!playerId) return cb({ ok: false, error: "playerId required." });
+    if (!code) return cb({ ok: false, error: "Room code required." });
+    const res = rooms.joinRoom({ code, name, playerId, socketId: socket.id });
+    cb(res.ok ? { ok: true } : res);
   });
 
-  socket.on("room:reconnect", ({ code, playerId }, cb) => {
-    const room = rooms.get(code);
-    if (!room) return cb({ ok: false, error: "Room not found" });
-
-    const p = room.players.get(playerId);
-    if (!p) return cb({ ok: false, error: "Player not in room" });
-
-    p.socketId = socket.id;
-    p.connected = true;
-
-    socket.join(code);
-    emitRoomState(room);
-
-    cb({ ok: true });
+  socket.on("room:reconnect", (payload, cb) => {
+    const playerId = String(payload?.playerId ?? "");
+    const code = String(payload?.code ?? "").toUpperCase();
+    const res = rooms.reconnect({ code, playerId, socketId: socket.id });
+    cb(res.ok ? { ok: true } : res);
   });
 
-  socket.on("room:leave", ({ playerId }, cb) => {
-    const code = getSocketRoomCode(socket.rooms, socket.id);
-    if (!code) return cb();
-
-    const room = rooms.get(code);
-    if (!room) return cb();
-
-    room.players.delete(playerId);
-    socket.leave(code);
-
-    ensureHost(room);
-
-    if (room.players.size === 0) rooms.delete(code);
-    else emitRoomState(room);
-
+  socket.on("room:leave", (payload, cb) => {
+    rooms.leave(socket.id, String(payload?.playerId ?? ""));
     cb();
   });
 
-  socket.on("room:start", (cb) => {
-    const code = getSocketRoomCode(socket.rooms, socket.id);
-    if (!code) return cb({ ok: false, error: "Not in a room" });
+  socket.on("room:start", (cb) => cb(rooms.start(socket.id)));
 
-    const room = rooms.get(code);
-    if (!room) return cb({ ok: false, error: "Room not found" });
+  socket.on("room:ready", (payload, cb) => {
+    cb(rooms.setReady(socket.id, String(payload?.playerId ?? ""), Boolean(payload?.ready)));
+  });
 
-    const allReady = Array.from(room.players.values()).every((p) => p.ready);
-    if (!allReady) return cb({ ok: false, error: "Both players must be ready" });
-
-    // identify player by socketId
-    const me = Array.from(room.players.values()).find((p) => p.socketId === socket.id) ?? null;
-    if (!me) return cb({ ok: false, error: "Player not in room" });
-
-    if (!isHost(room, me.playerId)) return cb({ ok: false, error: "Only the host can start" });
-    if (room.status !== "lobby") return cb({ ok: false, error: "Already started" });
-    if (room.players.size !== 2) return cb({ ok: false, error: "Need 2 players to start" });
-
-    room.status = "in_game";
-    emitRoomState(room);
-
+  socket.on("queue:join", (payload, cb) => {
+    const name = cleanName(payload?.name);
+    const playerId = String(payload?.playerId ?? "");
+    if (!name) return cb({ ok: false, error: "Name required." });
+    if (!playerId) return cb({ ok: false, error: "playerId required." });
+    if (rooms.membership(socket.id)) return cb({ ok: false, error: "Leave your room first." });
+    rooms.joinQueue({ name, playerId, socketId: socket.id });
     cb({ ok: true });
   });
 
-  socket.on("room:ready", ({ playerId, ready }, cb) => {
-    const code = getSocketRoomCode(socket.rooms, socket.id);
-    if (!code) return cb({ ok: false, error: "Not in a room" });
-
-    const room = rooms.get(code);
-    if (!room) return cb({ ok: false, error: "Room not found" });
-    if (room.status !== "lobby") return cb({ ok: false, error: "Game already started" });
-
-    const p = room.players.get(playerId);
-    if (!p) return cb({ ok: false, error: "Player not found" });
-
-    // anti-cheat: only that player's current socket can change their ready
-    if (p.socketId !== socket.id) return cb({ ok: false, error: "Invalid player" });
-
-    p.ready = ready;
-    emitRoomState(room);
-    cb({ ok: true });
+  socket.on("queue:leave", (payload, cb) => {
+    rooms.leaveQueue(String(payload?.playerId ?? ""));
+    socket.emit("queue:status", { waiting: false });
+    cb();
   });
 
-  socket.on("disconnect", () => {
-    const code = getSocketRoomCode(socket.rooms, socket.id);
-    if (!code) return;
-
-    const room = rooms.get(code);
-    if (!room) return;
-
-    // find player by socketId
-    const player = Array.from(room.players.values()).find((p) => p.socketId === socket.id);
-    if (!player) return;
-
-    player.connected = false;
-    player.socketId = null;
-
-    promoteHostIfHostDisconnected(room, player.playerId);
-    emitRoomState(room);
-
-    // Room is NOT deleted on disconnect; it closes only when everyone leaves (size==0).
-    // (Later you can add a cleanup timer to delete rooms that are fully disconnected for too long.)
+  socket.on("game:action", (payload, cb) => {
+    const action = payload?.action;
+    if (!action || typeof action !== "object" || typeof action.type !== "string") {
+      return cb({ ok: false, error: "Invalid action." });
+    }
+    cb(rooms.action(socket.id, action));
   });
+
+  socket.on("game:view", (cb) => cb({ ok: true, view: rooms.viewFor(socket.id) }));
+
+  socket.on("disconnect", () => rooms.disconnect(socket.id));
 });
 
 const port = Number(process.env.PORT ?? 3001);
-httpServer.listen(port, () => console.log(`server listening on :${port}`));
+httpServer.listen(port, () => console.log(`StarRealms.io server listening on :${port}`));
