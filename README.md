@@ -51,6 +51,16 @@ API/WebSocket endpoint and the static client on `$PORT` (default 3001). The clie
 uses the same origin when `VITE_SERVER_URL` is not set, so no extra configuration is
 needed. `BOT_STEP_MS` controls how fast the AI plays (default 650 ms per action).
 
+There is a Heroku setup in place: the `Procfile` runs `npm run start`, and
+`heroku-postbuild` builds all three packages, so a `git push heroku <branch>:main`
+is the whole deploy.
+
+**Run exactly one web dyno.** Rooms, matchmaking and games are held in memory, so a
+second dyno would put paired players on different instances and break matchmaking.
+Running more than one instance requires moving room state to Redis and adding the
+Socket.IO Redis adapter plus session affinity. For the same reason, a restart or a
+dyno cycle drops games in progress.
+
 ## Rules summary
 
 Each player starts with 50 Authority and a deck of 8 Scouts and 2 Vipers. On your
