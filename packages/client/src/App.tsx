@@ -1,35 +1,23 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useConnection } from "./hooks/useConnection";
+import { Home } from "./components/Home";
+import { Lobby } from "./components/Lobby";
+import { Game } from "./components/Game";
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const conn = useConnection();
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
-}
+    <div className={`app screen-${conn.screen}`}>
+      {conn.toast && <div className="toast">{conn.toast}</div>}
+      {!conn.connected && conn.screen !== "home" && (
+        <div className="banner offline">Connection lost. Reconnecting…</div>
+      )}
 
-export default App
+      {conn.screen === "home" && <Home conn={conn} />}
+      {conn.screen === "lobby" && conn.room && <Lobby conn={conn} room={conn.room} />}
+      {conn.screen === "game" && conn.room && conn.view && (
+        <Game conn={conn} view={conn.view} room={conn.room} />
+      )}
+    </div>
+  );
+}

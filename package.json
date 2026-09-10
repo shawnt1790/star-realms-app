@@ -1,12 +1,31 @@
 {
   "name": "starrealms-io",
   "private": true,
-  "workspaces": ["packages/*"],
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "npm -ws run dev",
-    "build": "npm -ws run build",
-    "test": "npm -ws run test",
-    "lint": "npm -ws run lint",
-    "typecheck": "npm -ws run typecheck"
+    "dev": "node scripts/dev.mjs",
+    "build": "npm -w @sr/shared run build && npm -w @sr/server run build && npm -w @sr/client run build",
+    "build:heroku": "npm run build",
+    "heroku-postbuild": "npm run build:heroku",
+    "start": "npm -w @sr/server run start",
+    "test": "npm -ws run test --if-present",
+    "lint": "eslint . && npm -w @sr/client run lint",
+    "typecheck": "npm -w @sr/shared run build && npm -w @sr/server run typecheck && npm -w @sr/client run typecheck",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "e2e": "node scripts/e2e.mjs"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.39.2",
+    "prettier": "^3.8.1",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
