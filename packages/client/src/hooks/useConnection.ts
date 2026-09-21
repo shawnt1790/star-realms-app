@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GameView, PlayerAction, RoomState } from "@sr/shared";
 import { socket } from "../api/socket";
 import { getOrCreatePlayerId, loadRoomCode, saveRoomCode } from "../identity";
+import { trackEvent } from "../analytics";
 
 export type Screen = "home" | "lobby" | "game";
 
@@ -15,6 +16,11 @@ export function useConnection() {
   const [queueWaiting, setQueueWaiting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const gameTrackedRef = useRef<{ code: string | null; started: boolean; finished: boolean }>({
+    code: null,
+    started: false,
+    finished: false,
+  });
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -24,9 +30,22 @@ export function useConnection() {
 
   useEffect(() => {
     function onRoomState(payload: { room: RoomState }) {
-      setRoom(payload.room);
-      saveRoomCode(payload.room.code);
-      if (payload.room.status === "lobby") setView(null);
+      const { room } = payload;
+      const tracked = gameTrackedRef.current;
+      if (tracked.code !== room.code) {
+        gameTrackedRef.current = { code: room.code, started: false, finished: false };
+      }
+      if (room.status === "in_game" && !gameTrackedRef.current.started) {
+        gameTrackedRef.current.started = true;
+        trackEvent("game_started", { mode: room.mode });
+      }
+      if (room.status === "finished" && !gameTrackedRef.current.finished) {
+        gameTrackedRef.current.finished = true;
+        trackEvent("game_finished", { mode: room.mode });
+      }
+      setRoom(room);
+      saveRoomCode(room.code);
+      if (room.status === "lobby") setView(null);
     }
     function onGameState(payload: { view: GameView }) {
       setView(payload.view);
