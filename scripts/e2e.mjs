@@ -5,7 +5,8 @@
 //
 // Exercises: private room lobby, ready/start, a full human-vs-human game driven by
 // the bot heuristics through the socket API, quick-match pairing, solo vs bot,
-// reconnect, and rematch.
+// reconnect, and rematch; then 4-player private rooms, solo vs 3 bots and a
+// 4-player quick match with a mid-game leave.
 
 import { io } from "socket.io-client";
 import { botDecide } from "../packages/shared/dist/index.js";
@@ -29,6 +30,7 @@ function connect() {
     room: null,
     view: null,
     queue: null,
+    needed: null,
     waiters: [],
     emit(event, ...args) {
       return new Promise((resolve) => socket.emit(event, ...args, resolve));
@@ -62,8 +64,9 @@ function connect() {
     client.view = view;
     client.notify();
   });
-  socket.on("queue:status", ({ waiting }) => {
+  socket.on("queue:status", ({ waiting, needed }) => {
     client.queue = waiting;
+    client.needed = needed ?? null;
     client.notify();
   });
   return new Promise((resolve) => socket.on("connect", () => resolve(client)));
@@ -108,6 +111,7 @@ function viewToState(v) {
     deck: [],
     factionsPlayed: {},
     shipCombatBonus: 0,
+    turnsTaken: Math.ceil(v.turn / v.players.length),
   }));
   return {
     ...v,
@@ -207,10 +211,118 @@ async function testSolo() {
   a.socket.close();
 }
 
+async function testFourPlayerRoom() {
+  console.log("4-player private room (hunter)");
+  const clients = [];
+  for (let i = 0; i < 5; i++) clients.push(await connect());
+  const [a, b, c, d, e] = clients;
+  const created = await a.emit("room:create", {
+    name: "A4",
+    playerId: "p-a4",
+    mode: "private",
+    maxPlayers: 4,
+    variant: "hunter",
+  });
+  assert(created.ok, "4-player room created");
+  await a.waitFor((x) => x.room !== null);
+  assert(a.room.maxPlayers === 4 && a.room.variant === "hunter", "room reports size and variant");
+  for (const [x, id] of [
+    [b, "b4"],
+    [c, "c4"],
+    [d, "d4"],
+  ]) {
+    const res = await x.emit("room:join", { code: created.code, name: id, playerId: `p-${id}` });
+    assert(res.ok, `${id} joined`);
+  }
+  const fifth = await e.emit("room:join", { code: created.code, name: "E4", playerId: "p-e4" });
+  assert(!fifth.ok, "fifth player is turned away");
+  await a.waitFor((x) => x.room?.players.length === 4);
+  const early = await a.emit("room:start");
+  assert(!early.ok, "cannot start before everyone is ready");
+  const ids = ["p-a4", "p-b4", "p-c4", "p-d4"];
+  const four = [a, b, c, d];
+  for (let i = 0; i < 4; i++) await four[i].emit("room:ready", { playerId: ids[i], ready: true });
+  await a.waitFor((x) => x.room?.players.every((p) => p.ready));
+  const started = await a.emit("room:start");
+  assert(started.ok, "host started the 4-player game");
+  for (const x of four) await x.waitFor((y) => y.view !== null);
+  assert(new Set(four.map((x) => x.view.me)).size === 4, "four distinct seats");
+  assert(four.reduce((n, x) => n + x.view.hand.length, 0) === 17, "opening hands are 3/4/5/5");
+  assert(a.view.variant === "hunter" && a.view.attackable.length === 1, "hunter has one prey");
+  await playOut(four);
+  const winner = a.view.winner;
+  assert(winner !== null && four.every((x) => x.view.winner === winner), "4p game has one winner");
+  assert(a.view.players.filter((p) => p.eliminated).length === 3, "everyone else was eliminated");
+  for (const x of clients) x.socket.close();
+}
+
+async function testSoloFour() {
+  console.log("solo vs 3 bots (free-for-all)");
+  const a = await connect();
+  const created = await a.emit("room:create", {
+    name: "Solo4",
+    playerId: "p-solo4",
+    mode: "solo",
+    maxPlayers: 4,
+    variant: "ffa",
+  });
+  assert(created.ok, "solo 4p room created");
+  await a.waitFor((c) => c.view !== null);
+  assert(a.room.players.filter((p) => p.isBot).length === 3, "three bots seated");
+  assert(new Set(a.room.players.map((p) => p.name)).size === 4, "bots have distinct names");
+  await playOut([a]);
+  assert(a.view.winner !== null, "solo 4p game finished");
+  a.socket.close();
+}
+
+async function testQuickMatchFour() {
+  console.log("4-player quick match");
+  const duo = await connect();
+  await duo.emit("queue:join", { name: "Duo", playerId: "p-duo" });
+  const clients = [];
+  for (let i = 0; i < 4; i++) clients.push(await connect());
+  for (let i = 0; i < 4; i++) {
+    const res = await clients[i].emit("queue:join", {
+      name: `Q4-${i}`,
+      playerId: `p-q4-${i}`,
+      maxPlayers: 4,
+      variant: "ffa",
+    });
+    assert(res.ok, `player ${i + 1} queued for 4p`);
+    if (i === 0) {
+      await clients[0].waitFor((c) => c.needed === 3);
+      assert(clients[0].needed === 3, "queue reports 3 more needed");
+    }
+  }
+  for (const c of clients) await c.waitFor((x) => x.view !== null);
+  const code = clients[0].room.code;
+  assert(
+    clients.every((c) => c.room.code === code && c.room.maxPlayers === 4),
+    "all four in one 4-player room",
+  );
+  assert(duo.queue === true && duo.room === null, "2-player queuer was not pulled in");
+
+  // One player leaves mid-game: they concede and the rest play on.
+  const [leaver, ...rest] = clients;
+  const seat = leaver.view.me;
+  await leaver.emit("room:leave", { playerId: "p-q4-0" });
+  await rest[0].waitFor((c) => c.view.players[seat].eliminated);
+  assert(rest[0].room.status === "in_game", "game continues after a leave");
+  await playOut(rest);
+  assert(
+    rest.every((c) => c.view.winner !== null),
+    "remaining three finish the game",
+  );
+  for (const c of [duo, ...clients]) c.socket.close();
+}
+
 try {
   await testPrivateRoomGame();
   await testQuickMatch();
   await testSolo();
+  await testFourPlayerRoom();
+  await testSoloFour();
+  await testQuickMatchFour();
 } catch (err) {
   failures += 1;
   console.error("  ✗ exception:", err.message);

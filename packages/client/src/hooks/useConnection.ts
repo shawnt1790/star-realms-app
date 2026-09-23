@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GameView, PlayerAction, RoomState } from "@sr/shared";
+import type { GameView, PlayerAction, RoomState, TableOptions } from "@sr/shared";
 import { socket } from "../api/socket";
 import { getOrCreatePlayerId, loadRoomCode, saveRoomCode } from "../identity";
 import { trackEvent } from "../analytics";
@@ -14,6 +14,8 @@ export function useConnection() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [view, setView] = useState<GameView | null>(null);
   const [queueWaiting, setQueueWaiting] = useState(false);
+  /** Players still needed before a quick match starts. */
+  const [queueNeeded, setQueueNeeded] = useState(1);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
   const gameTrackedRef = useRef<{ code: string | null; started: boolean; finished: boolean }>({
@@ -37,11 +39,11 @@ export function useConnection() {
       }
       if (room.status === "in_game" && !gameTrackedRef.current.started) {
         gameTrackedRef.current.started = true;
-        trackEvent("game_started", { mode: room.mode });
+        trackEvent("game_started", tags(room));
       }
       if (room.status === "finished" && !gameTrackedRef.current.finished) {
         gameTrackedRef.current.finished = true;
-        trackEvent("game_finished", { mode: room.mode });
+        trackEvent("game_finished", tags(room));
       }
       setRoom(room);
       saveRoomCode(room.code);
@@ -50,8 +52,9 @@ export function useConnection() {
     function onGameState(payload: { view: GameView }) {
       setView(payload.view);
     }
-    function onQueue(payload: { waiting: boolean }) {
+    function onQueue(payload: { waiting: boolean; needed?: number }) {
       setQueueWaiting(payload.waiting);
+      setQueueNeeded(payload.needed ?? 1);
     }
     function onToast(payload: { message: string }) {
       showToast(payload.message);
@@ -93,9 +96,9 @@ export function useConnection() {
   }, [playerId, showToast]);
 
   const createRoom = useCallback(
-    (name: string, mode: "private" | "solo") =>
+    (name: string, mode: "private" | "solo", table?: TableOptions) =>
       new Promise<ActionResult>((resolve) => {
-        socket.emit("room:create", { name, playerId, mode }, (res) => {
+        socket.emit("room:create", { name, playerId, mode, ...table }, (res) => {
           if (!res.ok) showToast(res.error);
           resolve(res.ok ? { ok: true } : res);
         });
@@ -115,8 +118,8 @@ export function useConnection() {
   );
 
   const quickMatch = useCallback(
-    (name: string) => {
-      socket.emit("queue:join", { name, playerId }, (res) => {
+    (name: string, table?: TableOptions) => {
+      socket.emit("queue:join", { name, playerId, ...table }, (res) => {
         if (!res.ok) showToast(res.error);
       });
     },
@@ -174,6 +177,7 @@ export function useConnection() {
     view,
     screen,
     queueWaiting,
+    queueNeeded,
     toast,
     showToast,
     createRoom,
@@ -188,3 +192,7 @@ export function useConnection() {
 }
 
 export type Connection = ReturnType<typeof useConnection>;
+
+function tags(room: RoomState) {
+  return { mode: room.mode, players: room.maxPlayers, variant: room.variant };
+}

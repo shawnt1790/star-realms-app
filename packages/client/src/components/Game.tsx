@@ -9,11 +9,26 @@ type Props = { conn: Connection; view: GameView; room: RoomState };
 
 export function Game({ conn, view, room }: Props) {
   const me = view.players[view.me];
-  // Still a 2-player table: the single opponent panel shows the next seat.
-  const oppIdx = (view.me + 1) % view.players.length;
-  const opp = view.players[oppIdx];
   const myTurn = view.current === view.me && view.winner === null;
   const blocked = !myTurn || view.choice !== null;
+  const multi = view.players.length > 2;
+
+  // Opponents in turn order, starting with the player on my left.
+  const opponents = view.players
+    .map((_, i) => (view.me + 1 + i) % view.players.length)
+    .slice(0, view.players.length - 1);
+  // Opponents I can do something to: hit their authority or their bases.
+  const targetChoices = opponents.filter(
+    (i) => view.attackable.includes(i) || view.baseTargets.includes(i),
+  );
+  const [picked, setPicked] = useState<number | null>(null);
+  const target =
+    picked !== null && targetChoices.includes(picked)
+      ? picked
+      : (view.attackable[0] ?? targetChoices[0] ?? null);
+  // The opponent board shows my target on my turn, otherwise whoever is playing.
+  const oppIdx = myTurn || view.current === view.me ? (target ?? opponents[0]!) : view.current;
+  const opp = view.players[oppIdx]!;
   const [hovered, setPreview] = useState<CardInstance | null>(null);
   // Only show the preview while the hovered card is still on the table; cards that
   // leave the board (bought, scrapped, played) never fire mouseleave.
@@ -65,18 +80,29 @@ export function Game({ conn, view, room }: Props) {
   }
 
   const oppHasOutpost = opp.bases.some((b) => getCardDef(b.defId).outpost);
-  const canAttackFace = myTurn && !blocked && me.combat > 0 && !oppHasOutpost;
+  const canHitOpp = view.attackable.includes(oppIdx);
+  const canAttackFace = myTurn && !blocked && me.combat > 0 && canHitOpp && !oppHasOutpost;
+  const attackTitle = !canHitOpp
+    ? `You can't attack ${opp.name} directly`
+    : oppHasOutpost
+      ? "Destroy their outposts first"
+      : `Attack for ${me.combat} combat`;
+
+  function attackOpp() {
+    act({ type: "attack_player", target: oppIdx });
+  }
 
   function baseTargetable(base: CardInstance): boolean {
+    if (!view.baseTargets.includes(oppIdx)) return false;
     const def = getCardDef(base.defId);
     if (!def.outpost && oppHasOutpost) return false;
     return me.combat >= (def.defense ?? 0);
   }
 
-  const winnerName = view.winner === null ? null : view.players[view.winner].name;
+  const winnerName = view.winner === null ? null : view.players[view.winner]!.name;
   const iWon = view.winner === view.me;
   const meRoom = room.players.find((p) => p.id === conn.playerId);
-  const oppRoom = room.players.find((p) => p.id !== conn.playerId);
+  const otherHumans = view.players.filter((p) => p.id !== conn.playerId && !p.isBot);
 
   return (
     <div className="game">
@@ -86,7 +112,8 @@ export function Game({ conn, view, room }: Props) {
           <div className="pname">
             {opp.name}
             {opp.isBot && <span className="chip">bot</span>}
-            {!opp.connected && <span className="chip warn">disconnected</span>}
+            {opp.eliminated && <span className="chip warn">out</span>}
+            {!opp.connected && !opp.isBot && <span className="chip warn">disconnected</span>}
           </div>
           <div className="authority">
             <span className="big">{Math.max(opp.authority, 0)}</span>
@@ -97,7 +124,7 @@ export function Game({ conn, view, room }: Props) {
             <span title="Hand">✋ {opp.handCount}</span>
             <span title="Discard pile">🗑 {opp.discard.length}</span>
           </div>
-          {!myTurn && view.winner === null && (
+          {view.current === oppIdx && view.winner === null && (
             <div className="pool">
               <span className="res trade">{opp.trade}</span>
               <span className="res combat">{opp.combat}</span>
@@ -106,12 +133,10 @@ export function Game({ conn, view, room }: Props) {
           <button
             className="btn attack"
             disabled={!canAttackFace}
-            onClick={() => act({ type: "attack_player" })}
-            title={
-              oppHasOutpost ? "Destroy their outposts first" : `Attack for ${me.combat} combat`
-            }
+            onClick={attackOpp}
+            title={attackTitle}
           >
-            ⚔ Attack {me.combat > 0 && !oppHasOutpost ? `(${me.combat})` : ""}
+            ⚔ Attack {me.combat > 0 && canHitOpp && !oppHasOutpost ? `(${me.combat})` : ""}
           </button>
         </div>
         <div className="zone-cards">
@@ -330,16 +355,52 @@ export function Game({ conn, view, room }: Props) {
           )}
         </div>
 
+        {multi && (
+          <ul className="seat-list">
+            {opponents.map((i) => {
+              const p = view.players[i]!;
+              const selectable = myTurn && targetChoices.includes(i);
+              return (
+                <li
+                  key={i}
+                  className={[
+                    i === view.current ? "current" : "",
+                    i === oppIdx ? "focused" : "",
+                    p.eliminated ? "out" : "",
+                    selectable ? "clickable" : "",
+                  ].join(" ")}
+                  onClick={selectable ? () => setPicked(i) : undefined}
+                >
+                  <span className="pname">
+                    {i === view.current ? "▸ " : ""}
+                    {p.name}
+                    {p.isBot && <span className="chip">bot</span>}
+                    {view.variant === "hunter" && view.attackable[0] === i && (
+                      <span className="chip">prey</span>
+                    )}
+                    {!p.connected && !p.isBot && <span className="chip warn">offline</span>}
+                  </span>
+                  <span className="seat-auth">
+                    {p.eliminated ? "out" : Math.max(p.authority, 0)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
         <div className="turn-banner">
           {view.winner !== null
             ? "Game over"
-            : myTurn
-              ? view.choice
-                ? "Make a choice"
-                : "Your turn"
-              : view.choosing !== null && view.choosing !== view.me
-                ? `${view.players[view.choosing]!.name} is choosing…`
-                : `${view.players[view.current]!.name}'s turn`}
+            : me.eliminated
+              ? "You're out — spectating"
+              : myTurn
+                ? view.choice
+                  ? "Make a choice"
+                  : "Your turn"
+                : view.choosing !== null && view.choosing !== view.me
+                  ? `${view.players[view.choosing]!.name} is choosing…`
+                  : `${view.players[view.current]!.name}'s turn`}
           <small>turn {view.turn}</small>
         </div>
 
@@ -347,12 +408,26 @@ export function Game({ conn, view, room }: Props) {
           <button className="btn" disabled={blocked || view.hand.length === 0} onClick={playAll}>
             Play all
           </button>
+          {myTurn && targetChoices.length > 1 && (
+            <label className="target-pick">
+              <span>Target</span>
+              <select value={oppIdx} onChange={(e) => setPicked(Number(e.target.value))}>
+                {targetChoices.map((i) => (
+                  <option key={i} value={i}>
+                    {view.players[i]!.name} ({Math.max(view.players[i]!.authority, 0)})
+                    {view.attackable.includes(i) ? "" : " · bases only"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             className="btn attack"
             disabled={!canAttackFace}
-            onClick={() => act({ type: "attack_player" })}
+            onClick={attackOpp}
+            title={attackTitle}
           >
-            Attack {me.combat > 0 ? `(${me.combat})` : ""}
+            Attack{multi ? ` ${opp.name}` : ""} {me.combat > 0 ? `(${me.combat})` : ""}
           </button>
           <button
             className="btn primary"
@@ -367,7 +442,9 @@ export function Game({ conn, view, room }: Props) {
           <button
             className="btn ghost small"
             onClick={() => {
-              if (view.winner !== null || window.confirm("Concede this game?")) conn.leaveRoom();
+              if (view.winner !== null || me.eliminated || window.confirm("Concede this game?")) {
+                conn.leaveRoom();
+              }
             }}
           >
             Leave
@@ -418,18 +495,25 @@ export function Game({ conn, view, room }: Props) {
               {winnerName} wins. {view.gameOverReason}
             </p>
             <p className="muted">
-              Final authority: {me.name} {Math.max(me.authority, 0)} · {opp.name}{" "}
-              {Math.max(opp.authority, 0)}
+              Final authority:{" "}
+              {[view.me, ...opponents]
+                .map((i) => `${view.players[i]!.name} ${Math.max(view.players[i]!.authority, 0)}`)
+                .join(" · ")}
             </p>
-            {oppRoom && !oppRoom.isBot && (
-              <p className="muted">
-                {oppRoom.connected
-                  ? oppRoom.ready
-                    ? `${oppRoom.name} wants a rematch.`
-                    : `Waiting for ${oppRoom.name}…`
-                  : `${oppRoom.name} has left.`}
-              </p>
-            )}
+            {otherHumans.map((p) => {
+              const r = room.players.find((rp) => rp.id === p.id);
+              return (
+                <p key={p.id} className="muted">
+                  {!r
+                    ? `${p.name} has left.`
+                    : !r.connected
+                      ? `${r.name} is disconnected.`
+                      : r.ready
+                        ? `${r.name} wants a rematch.`
+                        : `Waiting for ${r.name}…`}
+                </p>
+              );
+            })}
             <div className="row center">
               <button className="btn ghost" onClick={conn.leaveRoom}>
                 Back to menu

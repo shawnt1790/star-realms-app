@@ -321,7 +321,8 @@ Still on defaults (change here if needed):
 
 - [x] Iteration 1 — engine generalised, golden test green, 4p engine tests green
       (2026-09-22, branch `issue16`; e2e green against a local fast server)
-- [ ] Iteration 2 — 3/4p rooms, quick-match queues, lobby, minimal UI, e2e green, deployed
+- [x] Iteration 2 — 3/4p rooms, quick-match queues, lobby, minimal UI, e2e green
+      (2026-09-23; **not yet deployed**: waiting on the owner's go-ahead)
 - [ ] Iteration 3 — seat strip UI, verified in browser
 - [ ] Iteration 4 — polish items chosen
 
@@ -347,3 +348,19 @@ Still on defaults (change here if needed):
 - Bot: `pickPrey` is exported. In FFA it finishes off any reachable player with
   a partial `amount`, then attacks its prey, and spends leftover combat on another
   open player if the prey is behind an outpost it can't break.
+
+### Iteration 2 notes
+
+- `RoomState` carries `maxPlayers` and `variant`; `room:create` / `queue:join` take
+  optional `maxPlayers` / `variant` (validated by `cleanTable` in `rooms.ts`, 2p
+  forces `ffa`). `queue:status` adds `needed`.
+- A leave mid-game concedes and the room stays `in_game`; a finished room with an
+  empty seat drops to the lobby when someone readies up (or someone leaves it).
+- Minimal game UI: a seat list in the sidebar (click to target), a `<select>` for
+  the target when several are legal, the opponent board shows your target on
+  your turn and the current player otherwise, "You're out — spectating" banner,
+  standings line on game over. Combat splitting has no UI yet (engine supports it).
+- Known gap, same as 2p today: a player who _disconnects_ (rather than leaving)
+  stalls the table on their turn until they reconnect or the room expires. With 3-4
+  players this hurts more; consider an auto-concede after a timeout.
+- The Home screen remembers the picked size and mode in `localStorage` (`sr_table`).

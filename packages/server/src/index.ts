@@ -8,7 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import type { ClientToServerEvents, ServerToClientEvents } from "@sr/shared";
-import { RoomManager, cleanName } from "./rooms.js";
+import { RoomManager, cleanName, cleanTable } from "./rooms.js";
 
 const app = express();
 app.use(cors());
@@ -40,7 +40,8 @@ io.on("connection", (socket) => {
     if (!name) return cb({ ok: false, error: "Name required." });
     if (!playerId) return cb({ ok: false, error: "playerId required." });
     const mode = payload.mode === "solo" ? "solo" : "private";
-    const room = rooms.createRoom({ name, playerId, socketId: socket.id, mode });
+    const table = cleanTable(payload);
+    const room = rooms.createRoom({ name, playerId, socketId: socket.id, mode, table });
     cb({ ok: true, code: room.code });
   });
 
@@ -81,7 +82,7 @@ io.on("connection", (socket) => {
     if (!name) return cb({ ok: false, error: "Name required." });
     if (!playerId) return cb({ ok: false, error: "playerId required." });
     if (rooms.membership(socket.id)) return cb({ ok: false, error: "Leave your room first." });
-    rooms.joinQueue({ name, playerId, socketId: socket.id });
+    rooms.joinQueue({ name, playerId, socketId: socket.id, table: cleanTable(payload) });
     cb({ ok: true });
   });
 

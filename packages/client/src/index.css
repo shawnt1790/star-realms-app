@@ -959,3 +959,89 @@ input:focus {
     font-size: 9.5px;
   }
 }
+
+/* ------------------------------------------------------------ table picker */
+
+.segmented {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.segmented button {
+  flex: 1;
+  background: var(--bg-2);
+  color: var(--muted);
+  border: 0;
+  border-right: 1px solid var(--line);
+  padding: 8px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.segmented button:last-child {
+  border-right: 0;
+}
+.segmented button.on {
+  background: var(--accent-2);
+  color: #fff;
+  font-weight: 600;
+}
+.segmented button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* ------------------------------------------------------------ multiplayer (minimal) */
+
+.seat-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.seat-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  font-size: 0.9em;
+}
+.seat-list li.clickable {
+  cursor: pointer;
+}
+.seat-list li.current {
+  border-color: var(--accent);
+}
+.seat-list li.focused {
+  background: var(--panel-2);
+}
+.seat-list li.out {
+  opacity: 0.45;
+}
+.seat-list .pname {
+  flex: 1;
+  min-width: 0;
+}
+.seat-list .seat-auth {
+  font-weight: 700;
+  color: var(--authority);
+}
+.target-pick {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+.target-pick select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px;
+}
