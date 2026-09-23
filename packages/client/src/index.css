@@ -844,6 +844,32 @@ input:focus {
   border-color: var(--combat);
   color: var(--text);
 }
+/* Per-seat colours in 3-4 player games (the viewer keeps the accent colour). */
+.seat-0 {
+  --seat-c: #ff6b6b;
+}
+.seat-1 {
+  --seat-c: #c084fc;
+}
+.seat-2 {
+  --seat-c: #2dd4bf;
+}
+.seat-3 {
+  --seat-c: #fb923c;
+}
+.log-line.seat {
+  border-color: var(--seat-c);
+  color: var(--text);
+}
+.seat-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--seat-c);
+  margin-right: 6px;
+  vertical-align: middle;
+}
 .log-line.sys {
   border-color: var(--gold);
   color: var(--gold);

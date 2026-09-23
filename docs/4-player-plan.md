@@ -325,7 +325,8 @@ Still on defaults (change here if needed):
       (2026-09-23; **not yet deployed**: waiting on the owner's go-ahead)
 - [x] Iteration 3 — seat strip UI, verified in browser (2026-09-23, solo 4p FFA and
       Hunter at 1280px and 1000px; 2p layout unchanged)
-- [ ] Iteration 4 — polish items chosen
+- [~] Iteration 4 — done: per-seat log colours, README and in-app multiplayer rules.
+  Open: bot kill-feeding / leader targeting, per-player log filter
 
 ### Iteration 1 notes (for whoever picks up iteration 2)
 

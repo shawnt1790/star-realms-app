@@ -137,7 +137,15 @@ export function Sidebar({
             {view.log.map((e, i) => (
               <div
                 key={i}
-                className={`log-line ${e.player === null ? "sys" : e.player === view.me ? "me" : "opp"}`}
+                className={`log-line ${
+                  e.player === null
+                    ? "sys"
+                    : e.player === view.me
+                      ? "me"
+                      : multi
+                        ? `seat seat-${e.player}`
+                        : "opp"
+                }`}
               >
                 {e.text}
               </div>

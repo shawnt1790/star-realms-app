@@ -179,8 +179,9 @@ export function Home({ conn }: { conn: Connection }) {
           <li>Reduce your opponent from 50 Authority to 0 to win.</li>
           <li>
             With 3 or 4 players, the last one standing wins. In Free-for-all you can attack anyone
-            and split your Combat; in Hunter you attack the player on your left and may hit bases on
-            either side.
+            and split your Combat between players. In Hunter you can only attack the Authority of
+            the player on your left (your prey), and the bases of the players on either side; card
+            effects that hit an opponent hit your prey.
           </li>
         </ul>
       </details>

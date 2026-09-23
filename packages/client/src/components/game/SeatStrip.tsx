@@ -25,6 +25,7 @@ export function SeatStrip({ view, seats, focused, onFocus }: Props) {
         const basesOnly = !canHit && view.baseTargets.includes(i);
         const classes = [
           "seat-card",
+          `seat-${i}`,
           playing ? "playing" : "",
           i === focused ? "focused" : "",
           p.eliminated ? "out" : "",
@@ -43,6 +44,7 @@ export function SeatStrip({ view, seats, focused, onFocus }: Props) {
             <div className="seat-head">
               <span className="seat-name">
                 {playing && <span className="seat-turn">▸</span>}
+                <span className="seat-dot" aria-hidden="true" />
                 {p.name}
               </span>
               <span className="seat-auth">{p.eliminated ? "out" : Math.max(p.authority, 0)}</span>
