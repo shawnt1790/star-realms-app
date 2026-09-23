@@ -188,6 +188,8 @@ describe("hunter", () => {
     expect(s.players[3]!.bases).toHaveLength(0);
 
     const v = buildView(s, 0);
+    expect(v.huntedBy).toBe(3);
+    expect(buildView(newGame("ffa"), 0).huntedBy).toBeNull();
     expect(v.attackable).toEqual([1]);
     expect(v.baseTargets).toEqual([1, 3]);
     expect(v.variant).toBe("hunter");
@@ -269,6 +271,8 @@ describe("elimination", () => {
     s = act(s, 0, { type: "attack_player", target: 3, amount: 1 });
     expect(s.winner).toBe(0);
     expect(s.gameOverReason).toBe("Dee was reduced to 0 authority.");
+    expect(s.eliminationOrder).toEqual([1, 2, 3]);
+    expect(buildView(s, 2).eliminationOrder).toEqual([1, 2, 3]);
     expectFail(s, 0, { type: "end_turn" }, /over/);
   });
 

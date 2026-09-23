@@ -192,6 +192,8 @@ export type GameState = {
   log: LogEntry[];
   winner: PlayerIndex | null;
   gameOverReason: string | null;
+  /** Seats in the order they were knocked out (first out first). */
+  eliminationOrder: PlayerIndex[];
   uidCounter: number;
   /** True during the very first turn (starting player draws 3). */
   startedAt: number;
@@ -258,6 +260,10 @@ export type GameView = {
   attackable: PlayerIndex[];
   /** Players whose bases the viewer may attack under the variant. */
   baseTargets: PlayerIndex[];
+  /** Hunter with 3+ players: the seat whose prey is the viewer. */
+  huntedBy: PlayerIndex | null;
+  /** Seats in the order they were knocked out (first out first). */
+  eliminationOrder: PlayerIndex[];
   log: LogEntry[];
   winner: PlayerIndex | null;
   gameOverReason: string | null;

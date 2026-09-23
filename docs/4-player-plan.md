@@ -323,7 +323,8 @@ Still on defaults (change here if needed):
       (2026-09-22, branch `issue16`; e2e green against a local fast server)
 - [x] Iteration 2 — 3/4p rooms, quick-match queues, lobby, minimal UI, e2e green
       (2026-09-23; **not yet deployed**: waiting on the owner's go-ahead)
-- [ ] Iteration 3 — seat strip UI, verified in browser
+- [x] Iteration 3 — seat strip UI, verified in browser (2026-09-23, solo 4p FFA and
+      Hunter at 1280px and 1000px; 2p layout unchanged)
 - [ ] Iteration 4 — polish items chosen
 
 ### Iteration 1 notes (for whoever picks up iteration 2)
@@ -364,3 +365,18 @@ Still on defaults (change here if needed):
   stalls the table on their turn until they reconnect or the room expires. With 3-4
   players this hurts more; consider an auto-concede after a timeout.
 - The Home screen remembers the picked size and mode in `localStorage` (`sr_table`).
+
+### Iteration 3 notes
+
+- `Game.tsx` is split into `components/game/` (`Game`, `SeatStrip`, `OpponentBoard`,
+  `Market`, `MyBoard`, `Sidebar`, `GameOver`, shared `types`). In 2p the seat strip
+  is not rendered and the grid is the original one.
+- Focus: on my turn the focused seat is my target (last clicked, else Hunter prey /
+  lowest-authority attackable). Off-turn it follows the current player; clicking a
+  seat peeks at it until the turn changes.
+- FFA splitting: a −/+ stepper above Attack when combat ≥ 2; the chosen amount is
+  scoped to the turn and resets after each attack.
+- The engine now records `eliminationOrder` and the view exposes it plus
+  `huntedBy`, so standings and the "hunts you" chip need no client-side rules.
+- `.claude/launch.json` (outer folder) has a `server-fast` config on :3003 with
+  `BOT_STEP_MS=40` for watching bot-heavy games in the browser pane.

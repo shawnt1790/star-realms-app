@@ -1,7 +1,7 @@
 // Builds the redacted per-player view of a game state.
 
 import type { GameState, GameView, PlayerIndex, PublicPlayerView } from "./types.js";
-import { attackableBaseOwners, attackablePlayers } from "./targeting.js";
+import { attackableBaseOwners, attackablePlayers, prevAlive } from "./targeting.js";
 
 const LOG_LIMIT = 200;
 
@@ -33,6 +33,14 @@ export function buildView(
 
   const active = state.choices[0] ?? null;
   const mine = active && active.player === me ? active : null;
+  const hunter = prevAlive(state, me);
+  const huntedBy =
+    state.variant === "hunter" &&
+    state.players.length > 2 &&
+    !state.players[me].eliminated &&
+    hunter !== me
+      ? hunter
+      : null;
 
   return {
     id: state.id,
@@ -50,6 +58,8 @@ export function buildView(
     choosing: active ? active.player : null,
     attackable: attackablePlayers(state, me),
     baseTargets: attackableBaseOwners(state, me),
+    huntedBy,
+    eliminationOrder: state.eliminationOrder,
     log: state.log.slice(-LOG_LIMIT),
     winner: state.winner,
     gameOverReason: state.gameOverReason,

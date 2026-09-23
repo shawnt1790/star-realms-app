@@ -178,6 +178,7 @@ export function createGame(opts: CreateGameOptions): GameState {
     log: [],
     winner: null,
     gameOverReason: null,
+    eliminationOrder: [],
     uidCounter: 0,
     startedAt: Date.now(),
   };
@@ -645,6 +646,7 @@ function eliminate(state: GameState, pi: PlayerIndex, reason: string) {
   const p = state.players[pi];
   p.eliminated = true;
   p.pendingDiscard = 0;
+  state.eliminationOrder.push(pi);
   const alive = alivePlayers(state);
   if (alive.length === 1) {
     endGame(state, alive[0]!, reason);

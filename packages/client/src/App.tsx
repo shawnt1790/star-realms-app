@@ -1,7 +1,7 @@
 import { useConnection } from "./hooks/useConnection";
 import { Home } from "./components/Home";
 import { Lobby } from "./components/Lobby";
-import { Game } from "./components/Game";
+import { Game } from "./components/game/Game";
 
 export default function App() {
   const conn = useConnection();

@@ -992,56 +992,169 @@ input:focus {
   opacity: 0.6;
 }
 
-/* ------------------------------------------------------------ multiplayer (minimal) */
+/* ------------------------------------------------------------ multiplayer */
 
-.seat-list {
-  list-style: none;
-  margin: 0 0 10px;
-  padding: 0;
-  display: grid;
-  gap: 4px;
+.game.multi {
+  grid-template-rows: auto auto auto 1fr;
+  grid-template-areas:
+    "seats side"
+    "opp side"
+    "market side"
+    "mine side";
 }
-.seat-list li {
+.seat-strip {
+  grid-area: seats;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg-2);
-  font-size: 0.9em;
-}
-.seat-list li.clickable {
-  cursor: pointer;
-}
-.seat-list li.current {
-  border-color: var(--accent);
-}
-.seat-list li.focused {
-  background: var(--panel-2);
-}
-.seat-list li.out {
-  opacity: 0.45;
-}
-.seat-list .pname {
-  flex: 1;
+  gap: 10px;
+  overflow-x: auto;
   min-width: 0;
+  padding-bottom: 2px;
 }
-.seat-list .seat-auth {
-  font-weight: 700;
-  color: var(--authority);
-}
-.target-pick {
+.seat-card {
+  flex: 1 0 200px;
+  max-width: 320px;
   display: grid;
-  gap: 4px;
-  font-size: 0.85em;
-  color: var(--muted);
-}
-.target-pick select {
+  gap: 6px;
+  align-content: start;
+  text-align: left;
   font: inherit;
   color: var(--text);
-  background: var(--bg-2);
+  background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+.seat-card:hover {
+  border-color: var(--muted);
+}
+.seat-card.focused {
+  background: var(--panel-2);
+  border-color: var(--muted);
+}
+.seat-card.playing {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(91, 140, 255, 0.35);
+}
+.seat-card.out {
+  opacity: 0.45;
+}
+.seat-card.out .seat-auth {
+  color: var(--muted);
+}
+.seat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.seat-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seat-turn {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.seat-auth {
+  font-weight: 800;
+  font-size: 1.3em;
+  color: var(--authority);
+}
+.seat-counts {
+  display: flex;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.seat-bases {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 14px;
+  font-size: 0.8em;
+}
+.base-glyph {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--fc);
+}
+.base-glyph.outpost {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--fc);
+}
+.seat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 1.2em;
+}
+.seat-chips .chip {
+  margin-left: 0;
+}
+.chip.prey {
+  color: #ffd0d0;
+  border-color: var(--combat);
+}
+.chip.hunter {
+  color: #ffe6a3;
+  border-color: var(--gold);
+}
+.split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.split b {
+  color: var(--combat);
+}
+.standings {
+  list-style: none;
+  padding: 0;
+  margin: 12px auto;
+  max-width: 320px;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+.standings li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+.standings li.me {
+  border-color: var(--accent);
+}
+.standings .place {
+  width: 2.5em;
+  color: var(--muted);
+}
+.standings .pname {
+  flex: 1;
+  font-weight: 600;
+}
+@media (max-width: 1000px) {
+  .game.multi {
+    grid-template-areas:
+      "seats"
+      "opp"
+      "market"
+      "mine"
+      "side";
+  }
 }
