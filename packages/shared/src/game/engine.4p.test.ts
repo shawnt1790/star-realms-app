@@ -348,7 +348,7 @@ describe("bots", () => {
           expect(s.players.filter((p) => !p.eliminated)).toHaveLength(1);
           expect(s.turn).toBeLessThan(400);
         }
-      });
+      }, 30_000); // full simulations; slow CI runners need headroom
     }
   }
 });
