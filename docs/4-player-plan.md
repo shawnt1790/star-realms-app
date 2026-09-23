@@ -322,7 +322,7 @@ Still on defaults (change here if needed):
 - [x] Iteration 1 — engine generalised, golden test green, 4p engine tests green
       (2026-09-22, branch `issue16`; e2e green against a local fast server)
 - [x] Iteration 2 — 3/4p rooms, quick-match queues, lobby, minimal UI, e2e green
-      (2026-09-23; **not yet deployed**: waiting on the owner's go-ahead)
+      (2026-09-23; deployed to Heroku the same day, e2e green against deckwars.io)
 - [x] Iteration 3 — seat strip UI, verified in browser (2026-09-23, solo 4p FFA and
       Hunter at 1280px and 1000px; 2p layout unchanged)
 - [~] Iteration 4 — done: per-seat log colours, README and in-app multiplayer rules.

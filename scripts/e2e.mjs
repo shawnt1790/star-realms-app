@@ -2,6 +2,10 @@
 //
 //   PORT=3002 BOT_STEP_MS=5 node packages/server/dist/index.js &
 //   node scripts/e2e.mjs http://localhost:3002
+//   node scripts/e2e.mjs https://deckwars.io quick4   # run only the named tests
+//
+// Tests: private, quick, solo, private4, solo4, quick4. solo4 plays a whole game
+// against 3 bots, which needs a fast BOT_STEP_MS; against production use the others.
 //
 // Exercises: private room lobby, ready/start, a full human-vs-human game driven by
 // the bot heuristics through the socket API, quick-match pairing, solo vs bot,
@@ -12,6 +16,7 @@ import { io } from "socket.io-client";
 import { botDecide } from "../packages/shared/dist/index.js";
 
 const url = process.argv[2] ?? "http://localhost:3001";
+const only = new Set(process.argv.slice(3));
 let failures = 0;
 
 function assert(cond, msg) {
@@ -316,13 +321,19 @@ async function testQuickMatchFour() {
   for (const c of [duo, ...clients]) c.socket.close();
 }
 
+const tests = {
+  private: testPrivateRoomGame,
+  quick: testQuickMatch,
+  solo: testSolo,
+  private4: testFourPlayerRoom,
+  solo4: testSoloFour,
+  quick4: testQuickMatchFour,
+};
+
 try {
-  await testPrivateRoomGame();
-  await testQuickMatch();
-  await testSolo();
-  await testFourPlayerRoom();
-  await testSoloFour();
-  await testQuickMatchFour();
+  for (const [name, run] of Object.entries(tests)) {
+    if (only.size === 0 || only.has(name)) await run();
+  }
 } catch (err) {
   failures += 1;
   console.error("  ✗ exception:", err.message);
