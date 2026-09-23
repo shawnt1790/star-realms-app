@@ -1,0 +1,62 @@
+{
+  "1": {
+    "hash": "473e8c2dbe40440df47bab788cccd66ddc4c9a697e6c709ce75dadd99d44a2d5",
+    "winner": 0,
+    "turns": 26
+  },
+  "2": {
+    "hash": "7715a089f0ed20d714014cfd0ddecf661ad2c4901657c6e33f4b483bcd9cfe5f",
+    "winner": 1,
+    "turns": 25
+  },
+  "3": {
+    "hash": "5371ff73c9694e487df4d07b819b143a4d60c7b3aa2db072233d82db1a82fc4c",
+    "winner": 1,
+    "turns": 24
+  },
+  "4": {
+    "hash": "3b7b43a7d9d53ab40d4c9a0e071a3f29c2a414c872846c04ac07d9ab6093da3b",
+    "winner": 0,
+    "turns": 27
+  },
+  "5": {
+    "hash": "dbd19fbb7fdfffac392774a73514cc48876b85463a390d3fdd4266ab1c64917b",
+    "winner": 1,
+    "turns": 22
+  },
+  "6": {
+    "hash": "157e02d81d7c1cbe8a735f97a7a15457e58a74b15a257f53cd02875017624388",
+    "winner": 0,
+    "turns": 23
+  },
+  "7": {
+    "hash": "08d2148dd25de3951ee94ec31ea27745bf88264c96cc352fbf097f68959094dc",
+    "winner": 1,
+    "turns": 25
+  },
+  "8": {
+    "hash": "dcf7c138f6c38340fed366d97ed2abd32268288a3035dac478589d2261b97603",
+    "winner": 1,
+    "turns": 20
+  },
+  "9": {
+    "hash": "6a9d03b34bb3741f105b90fa5baccce0b4f614d8b03b3525a266588426a7ccd6",
+    "winner": 0,
+    "turns": 21
+  },
+  "10": {
+    "hash": "aae886576af1b563dda4fb5fb074640106a389e299f881d44c96aeb71eb4f374",
+    "winner": 0,
+    "turns": 26
+  },
+  "11": {
+    "hash": "d313137a40087759027936d46d999b5bd6363aa9b9c1dec048608b69a06766cc",
+    "winner": 1,
+    "turns": 20
+  },
+  "12": {
+    "hash": "df0320bb9fec344f88324a9b1521360ab800b1232f91ee6cb70ecc8caeb59f19",
+    "winner": 0,
+    "turns": 26
+  }
+}
