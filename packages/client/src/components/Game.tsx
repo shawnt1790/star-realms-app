@@ -9,7 +9,8 @@ type Props = { conn: Connection; view: GameView; room: RoomState };
 
 export function Game({ conn, view, room }: Props) {
   const me = view.players[view.me];
-  const oppIdx = view.me === 0 ? 1 : 0;
+  // Still a 2-player table: the single opponent panel shows the next seat.
+  const oppIdx = (view.me + 1) % view.players.length;
   const opp = view.players[oppIdx];
   const myTurn = view.current === view.me && view.winner === null;
   const blocked = !myTurn || view.choice !== null;
@@ -336,9 +337,9 @@ export function Game({ conn, view, room }: Props) {
               ? view.choice
                 ? "Make a choice"
                 : "Your turn"
-              : view.opponentChoosing
-                ? `${opp.name} is choosing…`
-                : `${opp.name}'s turn`}
+              : view.choosing !== null && view.choosing !== view.me
+                ? `${view.players[view.choosing]!.name} is choosing…`
+                : `${view.players[view.current]!.name}'s turn`}
           <small>turn {view.turn}</small>
         </div>
 

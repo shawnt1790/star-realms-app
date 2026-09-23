@@ -1,13 +1,14 @@
 // Builds the redacted per-player view of a game state.
 
 import type { GameState, GameView, PlayerIndex, PublicPlayerView } from "./types.js";
+import { attackableBaseOwners, attackablePlayers } from "./targeting.js";
 
 const LOG_LIMIT = 200;
 
 export function buildView(
   state: GameState,
   me: PlayerIndex,
-  connected: [boolean, boolean] = [true, true],
+  connected: boolean[] = state.players.map(() => true),
 ): GameView {
   const players = state.players.map(
     (p, i): PublicPlayerView => ({
@@ -25,9 +26,10 @@ export function buildView(
       pendingDiscard: p.pendingDiscard,
       nextShipToTop: p.nextShipToTop,
       used: p.used,
-      connected: connected[i as PlayerIndex],
+      connected: connected[i] ?? false,
+      eliminated: p.eliminated,
     }),
-  ) as [PublicPlayerView, PublicPlayerView];
+  );
 
   const active = state.choices[0] ?? null;
   const mine = active && active.player === me ? active : null;
@@ -37,6 +39,7 @@ export function buildView(
     me,
     turn: state.turn,
     current: state.current,
+    variant: state.variant,
     players,
     hand: state.players[me].hand,
     tradeRow: state.tradeRow,
@@ -44,7 +47,9 @@ export function buildView(
     explorers: state.explorers,
     scrapHeap: state.scrapHeap,
     choice: mine,
-    opponentChoosing: Boolean(active && active.player !== me),
+    choosing: active ? active.player : null,
+    attackable: attackablePlayers(state, me),
+    baseTargets: attackableBaseOwners(state, me),
     log: state.log.slice(-LOG_LIMIT),
     winner: state.winner,
     gameOverReason: state.gameOverReason,

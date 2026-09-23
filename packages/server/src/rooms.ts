@@ -10,7 +10,6 @@ import {
   type ClientToServerEvents,
   type GameState,
   type PlayerAction,
-  type PlayerIndex,
   type RoomCode,
   type RoomMode,
   type RoomState,
@@ -34,7 +33,7 @@ export type Room = {
   hostPlayerId: string;
   players: Map<string, Player>;
   /** Player ids in seat order once a game starts. */
-  seats: [string, string] | null;
+  seats: string[] | null;
   game: GameState | null;
   winnerId: string | null;
   botTimer: NodeJS.Timeout | null;
@@ -233,8 +232,8 @@ export class RoomManager {
 
     // Leaving mid-game counts as a concession.
     if (room.status === "in_game" && room.game && room.seats) {
-      const idx = room.seats.indexOf(playerId) as PlayerIndex | -1;
-      if (idx !== -1) {
+      const idx = room.seats.indexOf(playerId);
+      if (idx >= 0) {
         const res = applyAction(room.game, idx, { type: "concede" });
         if (res.ok) this.commitGame(room, res.state);
       }
@@ -323,14 +322,11 @@ export class RoomManager {
     if (players.length !== 2) return;
     // Alternate who sits first across rematches; createGame randomizes who goes first.
     const ordered = room.gamesPlayed % 2 === 0 ? players : [players[1]!, players[0]!];
-    room.seats = [ordered[0]!.playerId, ordered[1]!.playerId];
+    room.seats = ordered.map((p) => p.playerId);
     room.game = createGame({
       id: `${room.code}-${room.gamesPlayed + 1}`,
       seed: randomSeed(),
-      players: [
-        { id: ordered[0]!.playerId, name: ordered[0]!.name, isBot: ordered[0]!.isBot },
-        { id: ordered[1]!.playerId, name: ordered[1]!.name, isBot: ordered[1]!.isBot },
-      ],
+      players: ordered.map((p) => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
     });
     room.gamesPlayed += 1;
     room.status = "in_game";
@@ -379,7 +375,7 @@ export class RoomManager {
       return { ok: false, error: "No game in progress." };
     }
     const idx = room.seats.indexOf(player.playerId);
-    if (idx !== 0 && idx !== 1) return { ok: false, error: "You are spectating." };
+    if (idx < 0) return { ok: false, error: "You are spectating." };
     const res = applyAction(room.game, idx, action);
     if (!res.ok) return res;
     this.commitGame(room, res.state);
@@ -391,7 +387,7 @@ export class RoomManager {
     const found = this.roomForSocket(socketId);
     if (!found || !found.room.game || !found.room.seats) return null;
     const idx = found.room.seats.indexOf(found.player.playerId);
-    if (idx !== 0 && idx !== 1) return null;
+    if (idx < 0) return null;
     return buildView(found.room.game, idx, this.connectedSeats(found.room));
   }
 
@@ -453,12 +449,8 @@ export class RoomManager {
 
   // ---------------------------------------------------------------- emit
 
-  private connectedSeats(room: Room): [boolean, boolean] {
-    if (!room.seats) return [true, true];
-    return [
-      room.players.get(room.seats[0])?.connected ?? false,
-      room.players.get(room.seats[1])?.connected ?? false,
-    ];
+  private connectedSeats(room: Room): boolean[] {
+    return (room.seats ?? []).map((id) => room.players.get(id)?.connected ?? false);
   }
 
   roomState(room: Room): RoomState {
@@ -488,9 +480,7 @@ export class RoomManager {
     room.seats.forEach((playerId, idx) => {
       const p = room.players.get(playerId);
       if (!p?.socketId) return;
-      this.io
-        .to(p.socketId)
-        .emit("game:state", { view: buildView(room.game!, idx as PlayerIndex, connected) });
+      this.io.to(p.socketId).emit("game:state", { view: buildView(room.game!, idx, connected) });
     });
   }
 

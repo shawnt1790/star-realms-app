@@ -10,10 +10,12 @@ import type {
   Faction,
   GameState,
   PlayerAction,
+  PlayerIndex,
   PlayerState,
 } from "./types.js";
 import { EXPLORER, STARTER_SCOUT, STARTER_VIPER, getCardDef } from "./cards.js";
-import { allOwnedCards, effectiveDef, isOutpost, other } from "./engine.js";
+import { allOwnedCards, effectiveDef } from "./engine.js";
+import { alivePlayers, attackablePlayers, canAttackPlayer, isOutpost } from "./targeting.js";
 
 const STARTERS = new Set([STARTER_SCOUT, STARTER_VIPER]);
 
@@ -28,8 +30,31 @@ function keepValue(defId: string): number {
   return getCardDef(defId).cost + 1;
 }
 
-function myTurnNumber(state: GameState): number {
-  return Math.ceil(state.turn / 2);
+function myTurnNumber(p: PlayerState): number {
+  return p.turnsTaken;
+}
+
+/**
+ * The opponent this bot is going after: forced in Hunter; in free-for-all the
+ * attackable player with the least authority, then the most bases in play.
+ */
+export function pickPrey(state: GameState, pi: PlayerIndex): PlayerIndex | null {
+  let best: PlayerIndex | null = null;
+  for (const t of attackablePlayers(state, pi)) {
+    if (best === null) {
+      best = t;
+      continue;
+    }
+    const a = state.players[t];
+    const b = state.players[best];
+    if (
+      a.authority < b.authority ||
+      (a.authority === b.authority && a.bases.length > b.bases.length)
+    ) {
+      best = t;
+    }
+  }
+  return best;
 }
 
 function factionWeights(p: PlayerState): Partial<Record<Faction, number>> {
@@ -46,8 +71,8 @@ function factionWeights(p: PlayerState): Partial<Record<Faction, number>> {
   return out;
 }
 
-function scoreBuy(def: CardDef, p: PlayerState, state: GameState): number {
-  const turn = myTurnNumber(state);
+function scoreBuy(def: CardDef, p: PlayerState): number {
+  const turn = myTurnNumber(p);
   const weights = factionWeights(p);
   let score = def.cost;
   if (def.id === EXPLORER) return turn <= 3 ? 1.6 : 0.4;
@@ -64,14 +89,14 @@ function chooseBuy(state: GameState, p: PlayerState): PlayerAction | null {
     if (!card) return;
     const def = getCardDef(card.defId);
     if (def.cost > p.trade) return;
-    const score = scoreBuy(def, p, state);
+    const score = scoreBuy(def, p);
     if (score > bestScore) {
       bestScore = score;
       bestAction = { type: "buy", slot };
     }
   });
   if (state.explorers > 0 && p.trade >= 2) {
-    const score = scoreBuy(getCardDef(EXPLORER), p, state);
+    const score = scoreBuy(getCardDef(EXPLORER), p);
     if (score > bestScore) {
       bestScore = score;
       bestAction = { type: "buy", slot: "explorer" };
@@ -96,8 +121,14 @@ function pickBest(cards: CardInstance[], n: number): string[] {
 
 function decideChoice(state: GameState, choice: Choice): ChoiceResolution {
   const p = state.players[choice.player];
-  const opp = state.players[other(choice.player)];
-  const turn = myTurnNumber(state);
+  const preyIdx = pickPrey(state, choice.player);
+  const turn = myTurnNumber(p);
+
+  if (choice.type === "select_player") {
+    const pick =
+      preyIdx !== null && choice.candidates.includes(preyIdx) ? preyIdx : choice.candidates[0]!;
+    return { player: pick };
+  }
 
   if (choice.type === "choose_option") {
     const labels = choice.options.map((o) => o.label.toLowerCase());
@@ -108,7 +139,8 @@ function decideChoice(state: GameState, choice: Choice): ChoiceResolution {
     const discardIdx = labels.findIndex((l) => l.includes("discard"));
 
     // Lethal or near-lethal: always take combat.
-    if (combatIdx >= 0 && opp.authority <= p.combat + 6) return { option: combatIdx };
+    const prey = preyIdx === null ? null : state.players[preyIdx];
+    if (combatIdx >= 0 && prey && prey.authority <= p.combat + 6) return { option: combatIdx };
 
     switch (choice.sourceDefId) {
       case "trading_post":
@@ -155,7 +187,14 @@ function decideChoice(state: GameState, choice: Choice): ChoiceResolution {
       const row = state.tradeRow.filter(
         (c): c is CardInstance => c !== null && candidates.includes(c.uid),
       );
-      const oppWeights = factionWeights(opp);
+      // Deny whatever any living opponent is collecting.
+      const oppWeights: Partial<Record<Faction, number>> = {};
+      for (const o of alivePlayers(state)) {
+        if (o === choice.player) continue;
+        for (const [f, w] of Object.entries(factionWeights(state.players[o]))) {
+          oppWeights[f as Faction] = Math.max(oppWeights[f as Faction] ?? 0, w);
+        }
+      }
       let best: CardInstance | null = null;
       let bestScore = 0;
       for (const c of row) {
@@ -169,7 +208,9 @@ function decideChoice(state: GameState, choice: Choice): ChoiceResolution {
       return { cardUids: best && bestScore >= 4 ? [best.uid] : [] };
     }
     case "destroy_base": {
-      const bases = opp.bases.filter((c) => candidates.includes(c.uid));
+      const bases = state.players
+        .flatMap((o, i) => (i === choice.player ? [] : o.bases))
+        .filter((c) => candidates.includes(c.uid));
       const best = [...bases].sort((a, b) => {
         const da = getCardDef(a.defId);
         const db = getCardDef(b.defId);
@@ -188,7 +229,7 @@ function decideChoice(state: GameState, choice: Choice): ChoiceResolution {
         (c): c is CardInstance => c !== null && candidates.includes(c.uid),
       );
       const best = [...row].sort(
-        (a, b) => scoreBuy(getCardDef(b.defId), p, state) - scoreBuy(getCardDef(a.defId), p, state),
+        (a, b) => scoreBuy(getCardDef(b.defId), p) - scoreBuy(getCardDef(a.defId), p),
       )[0];
       if (best) return { cardUids: [best.uid] };
       return { cardUids: candidates.includes(EXPLORER) ? [EXPLORER] : [] };
@@ -217,16 +258,27 @@ function playOrder(hand: CardInstance[]): CardInstance[] {
   });
 }
 
+function attackPlayer(target: PlayerIndex, amount?: number): PlayerAction {
+  return amount === undefined
+    ? { type: "attack_player", target }
+    : { type: "attack_player", target, amount };
+}
+
 export function botDecide(state: GameState): PlayerAction {
   const pi = state.current;
   const p = state.players[pi];
-  const opp = state.players[other(pi)];
-  const turn = myTurnNumber(state);
+  const turn = myTurnNumber(p);
 
   const choice = state.choices[0];
   if (choice) {
     return { type: "resolve_choice", choiceId: choice.id, resolution: decideChoice(state, choice) };
   }
+
+  const preyIdx = pickPrey(state, pi);
+  if (preyIdx === null) return { type: "end_turn" };
+  const opp = state.players[preyIdx];
+  /** Players whose authority we can hit right now (no outposts in the way). */
+  const reachable = attackablePlayers(state, pi).filter((t) => canAttackPlayer(state, pi, t));
 
   // 1. Activate bases.
   for (const base of p.bases) {
@@ -246,7 +298,6 @@ export function botDecide(state: GameState): PlayerAction {
   // 3. Scrap abilities.
   const inPlayAll = [...p.inPlay, ...p.bases];
   const oppOutposts = opp.bases.filter(isOutpost);
-  const canHitFace = oppOutposts.length === 0;
   for (const card of inPlayAll) {
     const def = effectiveDef(card);
     if (!def.scrap || def.scrap.length === 0) continue;
@@ -255,7 +306,10 @@ export function botDecide(state: GameState): PlayerAction {
     if (card.defId === EXPLORER && turn >= 4 && allOwnedCards(p).length >= 14) {
       return { type: "scrap_card", uid: card.uid };
     }
-    if (combatGain > 0 && canHitFace && p.combat + combatGain >= opp.authority) {
+    if (
+      combatGain > 0 &&
+      reachable.some((t) => p.combat + combatGain >= state.players[t].authority)
+    ) {
       return { type: "scrap_card", uid: card.uid };
     }
     if (tradeGain > 0 && def.type === "ship") {
@@ -277,13 +331,17 @@ export function botDecide(state: GameState): PlayerAction {
 
   // 5. Attack.
   if (p.combat > 0) {
+    // Finish off anyone within reach, keeping the rest of the combat if others are too.
+    const kill = reachable.find((t) => state.players[t].authority <= p.combat);
+    if (kill !== undefined) {
+      return attackPlayer(kill, reachable.length > 1 ? state.players[kill].authority : undefined);
+    }
     if (oppOutposts.length > 0) {
       const target = [...oppOutposts]
         .filter((b) => getCardDef(b.defId).defense! <= p.combat)
         .sort((a, b) => getCardDef(b.defId).defense! - getCardDef(a.defId).defense!)[0];
       if (target) return { type: "attack_base", uid: target.uid };
     } else {
-      if (p.combat >= opp.authority) return { type: "attack_player" };
       const target = [...opp.bases]
         .filter((b) => {
           const def = getCardDef(b.defId);
@@ -291,8 +349,13 @@ export function botDecide(state: GameState): PlayerAction {
         })
         .sort((a, b) => getCardDef(b.defId).cost - getCardDef(a.defId).cost)[0];
       if (target) return { type: "attack_base", uid: target.uid };
-      return { type: "attack_player" };
+      return attackPlayer(preyIdx);
     }
+    // Prey is walled off: spend it on whoever else is open (free-for-all only).
+    const fallback = reachable
+      .filter((t) => t !== preyIdx)
+      .sort((a, b) => state.players[a].authority - state.players[b].authority)[0];
+    if (fallback !== undefined) return attackPlayer(fallback);
   }
 
   return { type: "end_turn" };
