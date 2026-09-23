@@ -363,8 +363,8 @@ Still on defaults (change here if needed):
   your turn and the current player otherwise, "You're out — spectating" banner,
   standings line on game over. Combat splitting has no UI yet (engine supports it).
 - Known gap, same as 2p today: a player who _disconnects_ (rather than leaving)
-  stalls the table on their turn until they reconnect or the room expires. With 3-4
-  players this hurts more; consider an auto-concede after a timeout.
+  stalls the table on their turn until they reconnect or the room expires. Tracked in
+  [issue #18](https://github.com/shawnt1790/star-realms-app/issues/18).
 - The Home screen remembers the picked size and mode in `localStorage` (`sr_table`).
 
 ### Iteration 3 notes
