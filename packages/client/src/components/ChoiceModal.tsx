@@ -14,13 +14,14 @@ type Candidate = { card: CardInstance; zone: string };
 
 function collectCandidates(view: GameView, uids: string[]): Candidate[] {
   const me = view.players[view.me];
-  const opp = view.players[view.me === 0 ? 1 : 0];
   const zones: [string, CardInstance[]][] = [
     ["Your hand", view.hand],
     ["Your discard pile", me.discard],
     ["In play", me.inPlay],
     ["Trade row", view.tradeRow.filter((c): c is CardInstance => c !== null)],
-    [`${opp.name}'s bases`, opp.bases],
+    ...view.players
+      .filter((_, i) => i !== view.me)
+      .map((p): [string, CardInstance[]] => [`${p.name}'s bases`, p.bases]),
   ];
   const out: Candidate[] = [];
   for (const uid of uids) {
@@ -60,6 +61,24 @@ export function ChoiceModal({ view, choice, onResolve, onHover }: Props) {
             {choice.options.map((o, i) => (
               <button key={i} className="btn primary big" onClick={() => onResolve({ option: i })}>
                 {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (choice.type === "select_player") {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal">
+          <h3>{source ? source.name : "Choose a player"}</h3>
+          <p>{choice.prompt}</p>
+          <div className="option-list">
+            {choice.candidates.map((i) => (
+              <button key={i} className="btn primary big" onClick={() => onResolve({ player: i })}>
+                {view.players[i]!.name}
               </button>
             ))}
           </div>

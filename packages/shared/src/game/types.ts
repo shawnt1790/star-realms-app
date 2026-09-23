@@ -4,7 +4,15 @@
 
 export type Faction = "trade_federation" | "blob" | "machine_cult" | "star_empire" | "neutral";
 
-export type PlayerIndex = 0 | 1;
+/** Seat index, 0..n-1, in turn order. */
+export type PlayerIndex = number;
+
+/**
+ * Multiplayer variant. Free-for-all: attack anyone. Hunter: attack the authority
+ * of the player on your left only, and bases of your left and right neighbours.
+ * Both reduce to the normal duel with 2 players.
+ */
+export type GameVariant = "ffa" | "hunter";
 
 /**
  * A single card ability effect. Effects are resolved in order by the engine.
@@ -109,9 +117,24 @@ export type Choice =
       sourceDefId: string;
       sourceUid: string;
       options: { label: string; effects: Effect[] }[];
+    }
+  | {
+      id: string;
+      type: "select_player";
+      player: PlayerIndex;
+      prompt: string;
+      sourceDefId: string;
+      sourceUid: string;
+      /** Seats the player may pick from. */
+      candidates: PlayerIndex[];
+      then: "opponent_discard";
+      amount: number;
     };
 
-export type ChoiceResolution = { cardUids: string[] } | { option: number };
+export type ChoiceResolution =
+  | { cardUids: string[] }
+  | { option: number }
+  | { player: PlayerIndex };
 
 export type LogEntry = {
   turn: number;
@@ -145,6 +168,10 @@ export type PlayerState = {
   used: Record<string, UsedAbilities>;
   /** Cards played this turn by faction. */
   factionsPlayed: Partial<Record<Faction, number>>;
+  /** Reduced to 0 authority or conceded: takes no more turns, can't be targeted. */
+  eliminated: boolean;
+  /** Turns this player has started. */
+  turnsTaken: number;
 };
 
 export type GameState = {
@@ -153,7 +180,9 @@ export type GameState = {
   seed: number;
   turn: number;
   current: PlayerIndex;
-  players: [PlayerState, PlayerState];
+  variant: GameVariant;
+  /** Seat order is turn order. */
+  players: PlayerState[];
   tradeDeck: CardInstance[];
   tradeRow: (CardInstance | null)[];
   explorers: number;
@@ -163,6 +192,8 @@ export type GameState = {
   log: LogEntry[];
   winner: PlayerIndex | null;
   gameOverReason: string | null;
+  /** Seats in the order they were knocked out (first out first). */
+  eliminationOrder: PlayerIndex[];
   uidCounter: number;
   /** True during the very first turn (starting player draws 3). */
   startedAt: number;
@@ -172,7 +203,11 @@ export type PlayerAction =
   | { type: "play_card"; uid: string }
   | { type: "play_all" }
   | { type: "buy"; slot: number | "explorer" }
-  | { type: "attack_player" }
+  /**
+   * `target` may be omitted when only one player can be attacked (always true in
+   * 2p); `amount` defaults to all remaining combat.
+   */
+  | { type: "attack_player"; target?: PlayerIndex; amount?: number }
   | { type: "attack_base"; uid: string }
   | { type: "activate_base"; uid: string }
   | { type: "scrap_card"; uid: string }
@@ -201,6 +236,7 @@ export type PublicPlayerView = {
   nextShipToTop: number;
   used: Record<string, UsedAbilities>;
   connected: boolean;
+  eliminated: boolean;
 };
 
 export type GameView = {
@@ -209,7 +245,8 @@ export type GameView = {
   me: PlayerIndex;
   turn: number;
   current: PlayerIndex;
-  players: [PublicPlayerView, PublicPlayerView];
+  variant: GameVariant;
+  players: PublicPlayerView[];
   hand: CardInstance[];
   tradeRow: (CardInstance | null)[];
   tradeDeckCount: number;
@@ -217,8 +254,16 @@ export type GameView = {
   scrapHeap: CardInstance[];
   /** Active choice if it's the viewer's to resolve. */
   choice: Choice | null;
-  /** True while the opponent is resolving a choice. */
-  opponentChoosing: boolean;
+  /** Seat resolving the active choice, if any (the viewer's own is also in `choice`). */
+  choosing: PlayerIndex | null;
+  /** Players the viewer may attack directly under the variant (outposts not considered). */
+  attackable: PlayerIndex[];
+  /** Players whose bases the viewer may attack under the variant. */
+  baseTargets: PlayerIndex[];
+  /** Hunter with 3+ players: the seat whose prey is the viewer. */
+  huntedBy: PlayerIndex | null;
+  /** Seats in the order they were knocked out (first out first). */
+  eliminationOrder: PlayerIndex[];
   log: LogEntry[];
   winner: PlayerIndex | null;
   gameOverReason: string | null;

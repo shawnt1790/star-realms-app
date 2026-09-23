@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyAction, createGame, allOwnedCards, targetableBases } from "./engine.js";
+import { applyAction, createGame, allOwnedCards } from "./engine.js";
+import { targetableBases } from "./targeting.js";
 import { botDecide } from "./bot.js";
 import { buildView } from "./view.js";
 import { EXPLORER, TRADE_DECK_DEFS, getCardDef } from "./cards.js";

@@ -7,15 +7,18 @@ import {
   buildView,
   createGame,
   randomSeed,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
   type ClientToServerEvents,
   type GameState,
+  type GameVariant,
   type PlayerAction,
-  type PlayerIndex,
   type RoomCode,
   type RoomMode,
   type RoomState,
   type RoomStatus,
   type ServerToClientEvents,
+  type TableOptions,
 } from "@sr/shared";
 
 export type Player = {
@@ -31,10 +34,13 @@ export type Room = {
   code: RoomCode;
   mode: RoomMode;
   status: RoomStatus;
+  /** Seats at the table; a game starts once they're all filled. */
+  maxPlayers: number;
+  variant: GameVariant;
   hostPlayerId: string;
   players: Map<string, Player>;
   /** Player ids in seat order once a game starts. */
-  seats: [string, string] | null;
+  seats: string[] | null;
   game: GameState | null;
   winnerId: string | null;
   botTimer: NodeJS.Timeout | null;
@@ -45,7 +51,6 @@ export type Room = {
 
 export type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 
-const BOT_ID = "bot";
 const BOT_NAMES = ["HAL", "Unit 7", "Overseer", "Cortex", "Nebula", "Vex"];
 const BOT_STEP_MS = Number(process.env.BOT_STEP_MS ?? 650);
 const ROOM_TTL_MS = 15 * 60 * 1000;
@@ -58,6 +63,23 @@ export function cleanName(name: unknown): string {
     .slice(0, MAX_NAME);
 }
 
+export type Table = { maxPlayers: number; variant: GameVariant };
+
+/** Validates client-supplied table options. With 2 players the variant is meaningless. */
+export function cleanTable(opts: TableOptions | undefined): Table {
+  const n = Number(opts?.maxPlayers);
+  const maxPlayers = Number.isInteger(n) && n >= MIN_PLAYERS && n <= MAX_PLAYERS ? n : MIN_PLAYERS;
+  const variant = maxPlayers > 2 && opts?.variant === "hunter" ? "hunter" : "ffa";
+  return { maxPlayers, variant };
+}
+
+type QueueEntry = { playerId: string; name: string; socketId: string };
+type Queue = { table: Table; entries: QueueEntry[] };
+
+function queueKey(t: Table): string {
+  return `${t.maxPlayers}:${t.variant}`;
+}
+
 function makeCode(len: number): RoomCode {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "";
@@ -65,11 +87,21 @@ function makeCode(len: number): RoomCode {
   return s;
 }
 
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
 export class RoomManager {
   private rooms = new Map<RoomCode, Room>();
   /** socket id -> membership */
   private socketIndex = new Map<string, { code: RoomCode; playerId: string }>();
-  private queue: { playerId: string; name: string; socketId: string }[] = [];
+  /** Quick-match queues keyed by table size and variant. */
+  private queues = new Map<string, Queue>();
 
   constructor(private io: IO) {
     setInterval(() => this.sweep(), 60 * 1000).unref();
@@ -97,7 +129,9 @@ export class RoomManager {
   stats() {
     let inGame = 0;
     for (const r of this.rooms.values()) if (r.status === "in_game") inGame++;
-    return { rooms: this.rooms.size, inGame, queued: this.queue.length };
+    let queued = 0;
+    for (const q of this.queues.values()) queued += q.entries.length;
+    return { rooms: this.rooms.size, inGame, queued };
   }
 
   // ---------------------------------------------------------------- rooms
@@ -110,11 +144,13 @@ export class RoomManager {
     return makeCode(6);
   }
 
-  private newRoom(mode: RoomMode, hostPlayerId: string): Room {
+  private newRoom(mode: RoomMode, hostPlayerId: string, table: Table): Room {
     const room: Room = {
       code: this.createRoomCode(),
       mode,
       status: "lobby",
+      maxPlayers: table.maxPlayers,
+      variant: table.variant,
       hostPlayerId,
       players: new Map(),
       seats: null,
@@ -159,20 +195,30 @@ export class RoomManager {
     this.io.sockets.sockets.get(socketId)?.leave(code);
   }
 
-  createRoom(opts: { name: string; playerId: string; socketId: string; mode: "private" | "solo" }) {
-    const room = this.newRoom(opts.mode, opts.playerId);
+  createRoom(opts: {
+    name: string;
+    playerId: string;
+    socketId: string;
+    mode: "private" | "solo";
+    table: Table;
+  }) {
+    const room = this.newRoom(opts.mode, opts.playerId, opts.table);
     this.addPlayer(room, opts.playerId, opts.name, opts.socketId);
     this.bindSocket(opts.socketId, room, opts.playerId);
 
     if (opts.mode === "solo") {
-      room.players.set(BOT_ID, {
-        playerId: BOT_ID,
-        name: BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)]!,
-        socketId: null,
-        connected: true,
-        ready: true,
-        isBot: true,
-      });
+      const names = shuffled(BOT_NAMES);
+      for (let i = 1; i < room.maxPlayers; i++) {
+        const playerId = room.maxPlayers === 2 ? "bot" : `bot${i}`;
+        room.players.set(playerId, {
+          playerId,
+          name: names[i - 1]!,
+          socketId: null,
+          connected: true,
+          ready: true,
+          isBot: true,
+        });
+      }
       this.startGame(room);
     } else {
       this.emitRoomState(room);
@@ -191,7 +237,7 @@ export class RoomManager {
     const existing = room.players.get(opts.playerId);
     if (!existing) {
       if (room.status !== "lobby") return { ok: false, error: "That game already started." };
-      if (room.players.size >= 2) return { ok: false, error: "That room is full." };
+      if (room.players.size >= room.maxPlayers) return { ok: false, error: "That room is full." };
     }
     this.addPlayer(room, opts.playerId, opts.name, opts.socketId);
     this.bindSocket(opts.socketId, room, opts.playerId);
@@ -231,10 +277,10 @@ export class RoomManager {
     const player = room.players.get(playerId);
     if (!player) return;
 
-    // Leaving mid-game counts as a concession.
+    // Leaving mid-game counts as a concession; the others play on if 2+ remain.
     if (room.status === "in_game" && room.game && room.seats) {
-      const idx = room.seats.indexOf(playerId) as PlayerIndex | -1;
-      if (idx !== -1) {
+      const idx = room.seats.indexOf(playerId);
+      if (idx >= 0) {
         const res = applyAction(room.game, idx, { type: "concede" });
         if (res.ok) this.commitGame(room, res.state);
       }
@@ -247,19 +293,23 @@ export class RoomManager {
       return;
     }
     if (room.hostPlayerId === playerId) room.hostPlayerId = humans[0]!.playerId;
-    // A finished/in-progress game with a missing seat can't continue; back to lobby.
-    if (room.mode !== "solo" && room.status !== "lobby") {
-      room.status = "lobby";
-      room.game = null;
-      room.seats = null;
-      for (const p of room.players.values()) p.ready = p.isBot;
-    }
+    // A finished game can't be rematched with a missing seat; back to the lobby.
+    if (room.mode !== "solo" && room.status === "finished") this.backToLobby(room);
     this.emitRoomState(room);
+    this.emitGameState(room);
+    this.scheduleBot(room);
+  }
+
+  private backToLobby(room: Room) {
+    room.status = "lobby";
+    room.game = null;
+    room.seats = null;
+    for (const p of room.players.values()) p.ready = p.isBot;
   }
 
   disconnect(socketId: string) {
     const m = this.socketIndex.get(socketId);
-    this.queue = this.queue.filter((q) => q.socketId !== socketId);
+    this.removeFromQueues((q) => q.socketId === socketId);
     if (!m) return;
     this.socketIndex.delete(socketId);
     const room = this.rooms.get(m.code);
@@ -291,6 +341,8 @@ export class RoomManager {
     const { room, player } = found;
     if (player.playerId !== playerId) return { ok: false, error: "Invalid player." };
     if (room.status === "in_game") return { ok: false, error: "Game in progress." };
+    // Someone left after the game: the rematch waits in the lobby for a new player.
+    if (room.status === "finished" && room.players.size < room.maxPlayers) this.backToLobby(room);
     player.ready = ready;
     this.emitRoomState(room);
     this.maybeAutoStart(room);
@@ -304,33 +356,39 @@ export class RoomManager {
     if (room.hostPlayerId !== player.playerId)
       return { ok: false, error: "Only the host can start." };
     if (room.status === "in_game") return { ok: false, error: "Already started." };
-    if (room.players.size !== 2) return { ok: false, error: "Need 2 players to start." };
+    if (room.players.size !== room.maxPlayers) {
+      return { ok: false, error: `Need ${room.maxPlayers} players to start.` };
+    }
     const allReady = [...room.players.values()].every((p) => p.ready && p.connected);
-    if (!allReady) return { ok: false, error: "Both players must be ready." };
+    if (!allReady) {
+      return {
+        ok: false,
+        error: room.maxPlayers === 2 ? "Both players must be ready." : "Everyone must be ready.",
+      };
+    }
     this.startGame(room);
     return { ok: true };
   }
 
   private maybeAutoStart(room: Room) {
     if (room.status !== "finished") return;
-    if (room.players.size !== 2) return;
+    if (room.players.size !== room.maxPlayers) return;
     const allReady = [...room.players.values()].every((p) => p.ready && p.connected);
     if (allReady) this.startGame(room);
   }
 
   private startGame(room: Room) {
     const players = [...room.players.values()];
-    if (players.length !== 2) return;
-    // Alternate who sits first across rematches; createGame randomizes who goes first.
-    const ordered = room.gamesPlayed % 2 === 0 ? players : [players[1]!, players[0]!];
-    room.seats = [ordered[0]!.playerId, ordered[1]!.playerId];
+    if (players.length !== room.maxPlayers) return;
+    // Rotate seats across rematches; createGame randomizes who goes first.
+    const shift = room.gamesPlayed % players.length;
+    const ordered = [...players.slice(shift), ...players.slice(0, shift)];
+    room.seats = ordered.map((p) => p.playerId);
     room.game = createGame({
       id: `${room.code}-${room.gamesPlayed + 1}`,
       seed: randomSeed(),
-      players: [
-        { id: ordered[0]!.playerId, name: ordered[0]!.name, isBot: ordered[0]!.isBot },
-        { id: ordered[1]!.playerId, name: ordered[1]!.name, isBot: ordered[1]!.isBot },
-      ],
+      variant: room.variant,
+      players: ordered.map((p) => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
     });
     room.gamesPlayed += 1;
     room.status = "in_game";
@@ -343,30 +401,51 @@ export class RoomManager {
 
   // ---------------------------------------------------------------- queue
 
-  joinQueue(opts: { name: string; playerId: string; socketId: string }) {
-    this.queue = this.queue.filter(
-      (q) => q.playerId !== opts.playerId && q.socketId !== opts.socketId,
-    );
-    const partner = this.queue.shift();
-    if (partner && this.io.sockets.sockets.has(partner.socketId)) {
-      const room = this.newRoom("quick", partner.playerId);
-      this.addPlayer(room, partner.playerId, partner.name, partner.socketId);
-      this.addPlayer(room, opts.playerId, opts.name, opts.socketId);
-      this.bindSocket(partner.socketId, room, partner.playerId);
-      this.bindSocket(opts.socketId, room, opts.playerId);
-      this.io.to(partner.socketId).emit("queue:status", { waiting: false });
-      this.io.to(opts.socketId).emit("queue:status", { waiting: false });
-      this.startGame(room);
+  joinQueue(opts: { name: string; playerId: string; socketId: string; table: Table }) {
+    this.removeFromQueues((q) => q.playerId === opts.playerId || q.socketId === opts.socketId);
+    const key = queueKey(opts.table);
+    const queue = this.queues.get(key) ?? { table: opts.table, entries: [] };
+    this.queues.set(key, queue);
+    queue.entries = queue.entries.filter((q) => this.io.sockets.sockets.has(q.socketId));
+    queue.entries.push({ playerId: opts.playerId, name: opts.name, socketId: opts.socketId });
+
+    if (queue.entries.length < queue.table.maxPlayers) {
+      this.emitQueueStatus(queue);
       return;
     }
-    this.queue.push({ playerId: opts.playerId, name: opts.name, socketId: opts.socketId });
-    this.io.to(opts.socketId).emit("queue:status", { waiting: true });
+    const group = queue.entries.splice(0, queue.table.maxPlayers);
+    if (queue.entries.length === 0) this.queues.delete(key);
+    const room = this.newRoom("quick", group[0]!.playerId, queue.table);
+    for (const q of group) {
+      this.addPlayer(room, q.playerId, q.name, q.socketId);
+      this.bindSocket(q.socketId, room, q.playerId);
+      this.io.to(q.socketId).emit("queue:status", { waiting: false });
+    }
+    this.startGame(room);
   }
 
   leaveQueue(playerId: string) {
-    const before = this.queue.length;
-    this.queue = this.queue.filter((q) => q.playerId !== playerId);
-    return before !== this.queue.length;
+    return this.removeFromQueues((q) => q.playerId === playerId);
+  }
+
+  private removeFromQueues(match: (q: QueueEntry) => boolean): boolean {
+    let removed = false;
+    for (const [key, queue] of this.queues) {
+      const before = queue.entries.length;
+      queue.entries = queue.entries.filter((q) => !match(q));
+      if (queue.entries.length === before) continue;
+      removed = true;
+      if (queue.entries.length === 0) this.queues.delete(key);
+      else this.emitQueueStatus(queue);
+    }
+    return removed;
+  }
+
+  private emitQueueStatus(queue: Queue) {
+    const needed = queue.table.maxPlayers - queue.entries.length;
+    for (const q of queue.entries) {
+      this.io.to(q.socketId).emit("queue:status", { waiting: true, needed });
+    }
   }
 
   // ---------------------------------------------------------------- game
@@ -379,7 +458,7 @@ export class RoomManager {
       return { ok: false, error: "No game in progress." };
     }
     const idx = room.seats.indexOf(player.playerId);
-    if (idx !== 0 && idx !== 1) return { ok: false, error: "You are spectating." };
+    if (idx < 0) return { ok: false, error: "You are spectating." };
     const res = applyAction(room.game, idx, action);
     if (!res.ok) return res;
     this.commitGame(room, res.state);
@@ -391,7 +470,7 @@ export class RoomManager {
     const found = this.roomForSocket(socketId);
     if (!found || !found.room.game || !found.room.seats) return null;
     const idx = found.room.seats.indexOf(found.player.playerId);
-    if (idx !== 0 && idx !== 1) return null;
+    if (idx < 0) return null;
     return buildView(found.room.game, idx, this.connectedSeats(found.room));
   }
 
@@ -453,12 +532,8 @@ export class RoomManager {
 
   // ---------------------------------------------------------------- emit
 
-  private connectedSeats(room: Room): [boolean, boolean] {
-    if (!room.seats) return [true, true];
-    return [
-      room.players.get(room.seats[0])?.connected ?? false,
-      room.players.get(room.seats[1])?.connected ?? false,
-    ];
+  private connectedSeats(room: Room): boolean[] {
+    return (room.seats ?? []).map((id) => room.players.get(id)?.connected ?? false);
   }
 
   roomState(room: Room): RoomState {
@@ -466,6 +541,8 @@ export class RoomManager {
       code: room.code,
       mode: room.mode,
       status: room.status,
+      maxPlayers: room.maxPlayers,
+      variant: room.variant,
       winnerId: room.winnerId,
       players: [...room.players.values()].map((p) => ({
         id: p.playerId,
@@ -488,9 +565,7 @@ export class RoomManager {
     room.seats.forEach((playerId, idx) => {
       const p = room.players.get(playerId);
       if (!p?.socketId) return;
-      this.io
-        .to(p.socketId)
-        .emit("game:state", { view: buildView(room.game!, idx as PlayerIndex, connected) });
+      this.io.to(p.socketId).emit("game:state", { view: buildView(room.game!, idx, connected) });
     });
   }
 

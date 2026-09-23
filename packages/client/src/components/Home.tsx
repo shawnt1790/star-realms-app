@@ -1,16 +1,23 @@
 import { useState } from "react";
 import type { Connection } from "../hooks/useConnection";
-import { loadName, saveName } from "../identity";
+import { loadName, loadTable, saveName, saveTable, type TablePrefs } from "../identity";
 
 export function Home({ conn }: { conn: Connection }) {
   const [name, setName] = useState(loadName());
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [table, setTableState] = useState<TablePrefs>(loadTable);
   const clean = name.trim();
   const canGo = clean.length > 0 && conn.connected && !busy;
 
   function remember() {
     saveName(clean);
+  }
+
+  function setTable(next: Partial<TablePrefs>) {
+    const t = { ...table, ...next };
+    setTableState(t);
+    saveTable(t);
   }
 
   async function run(fn: () => Promise<unknown> | void) {
@@ -47,16 +54,63 @@ export function Home({ conn }: { conn: Connection }) {
             placeholder="Commander"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void run(() => conn.createRoom(clean, "solo"));
+              if (e.key === "Enter") void run(() => conn.createRoom(clean, "solo", table));
             }}
             autoFocus
           />
         </label>
 
+        <div className="field">
+          <span>Players</span>
+          <div className="segmented" role="radiogroup" aria-label="Players">
+            {[2, 3, 4].map((n) => (
+              <button
+                key={n}
+                role="radio"
+                aria-checked={table.maxPlayers === n}
+                className={table.maxPlayers === n ? "on" : ""}
+                disabled={conn.queueWaiting}
+                onClick={() => setTable({ maxPlayers: n })}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+        {table.maxPlayers > 2 && (
+          <div className="field">
+            <span>Mode</span>
+            <div className="segmented" role="radiogroup" aria-label="Mode">
+              {(
+                [
+                  ["ffa", "Free-for-all", "Attack anyone."],
+                  ["hunter", "Hunter", "Attack the player on your left; hit bases on either side."],
+                ] as const
+              ).map(([v, label, hint]) => (
+                <button
+                  key={v}
+                  role="radio"
+                  aria-checked={table.variant === v}
+                  className={table.variant === v ? "on" : ""}
+                  title={hint}
+                  disabled={conn.queueWaiting}
+                  onClick={() => setTable({ variant: v })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {conn.queueWaiting ? (
           <div className="queue-wait">
             <div className="spinner" />
-            <div>Looking for an opponent…</div>
+            <div>
+              {table.maxPlayers === 2
+                ? "Looking for an opponent…"
+                : `Looking for ${conn.queueNeeded} more player${conn.queueNeeded === 1 ? "" : "s"}…`}
+            </div>
             <button className="btn ghost" onClick={conn.cancelQueue}>
               Cancel
             </button>
@@ -66,21 +120,21 @@ export function Home({ conn }: { conn: Connection }) {
             <button
               className="btn primary big"
               disabled={!canGo}
-              onClick={() => run(() => conn.createRoom(clean, "solo"))}
+              onClick={() => run(() => conn.createRoom(clean, "solo", table))}
             >
               Play vs Computer
             </button>
             <button
               className="btn big"
               disabled={!canGo}
-              onClick={() => run(() => conn.quickMatch(clean))}
+              onClick={() => run(() => conn.quickMatch(clean, table))}
             >
               Quick Match
             </button>
             <button
               className="btn big"
               disabled={!canGo}
-              onClick={() => run(() => conn.createRoom(clean, "private"))}
+              onClick={() => run(() => conn.createRoom(clean, "private", table))}
             >
               Create Private Room
             </button>
@@ -123,6 +177,12 @@ export function Home({ conn }: { conn: Connection }) {
             remove the card from the game for a bonus.
           </li>
           <li>Reduce your opponent from 50 Authority to 0 to win.</li>
+          <li>
+            With 3 or 4 players, the last one standing wins. In Free-for-all you can attack anyone
+            and split your Combat between players. In Hunter you can only attack the Authority of
+            the player on your left (your prey), and the bases of the players on either side; card
+            effects that hit an opponent hit your prey.
+          </li>
         </ul>
       </details>
     </div>

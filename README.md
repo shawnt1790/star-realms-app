@@ -10,7 +10,8 @@ friend. No accounts, no downloads.
   scrap abilities, Stealth Needle copies, Fleet HQ, Blob World, forced discards…)
 - Authoritative server: every action is validated and each client only sees the
   information it is entitled to (opponent hands and deck order are hidden)
-- Solo mode against a heuristic AI, quick-match queue, and private rooms
+- 2, 3 or 4 players, with Free-for-all and Hunter variants for 3-4 player tables
+- Solo mode against 1-3 heuristic bots, quick-match queues, and private rooms
 - Reconnect after refresh or a dropped connection; rematch after a game
 - Deterministic, seedable engine with a unit-test suite
 
@@ -67,3 +68,18 @@ Each player starts with 50 Authority and a deck of 8 Scouts and 2 Vipers. On you
 turn play cards for Trade, Combat and Authority; buy from the trade row; attack your
 opponent (Outposts must be destroyed first); then discard everything and draw five.
 Reduce your opponent to 0 Authority to win.
+
+### 3 and 4 players
+
+Seat order is turn order, and the last player standing wins. Opening hands are 3,
+4, 5 (and 5) cards. A player at 0 Authority is eliminated: their bases leave play
+and they watch the rest of the game.
+
+- **Free-for-all**: attack any opponent's Authority or bases, and split your Combat
+  across several targets in one turn. Outposts only protect their owner.
+- **Hunter**: attack the Authority of the player on your left (your prey) and the
+  bases of your left and right neighbours only. "Target opponent" effects hit your
+  prey. When your prey is eliminated, the next player on your left becomes it.
+
+Quick match only pairs players who picked the same table size and variant. Leaving
+mid-game concedes; the others play on.

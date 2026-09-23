@@ -14,6 +14,7 @@ import type {
   Effect,
   Faction,
   GameState,
+  GameVariant,
   PlayerAction,
   PlayerIndex,
   PlayerState,
@@ -34,15 +35,19 @@ import {
 } from "./cards.js";
 import { shuffleInPlace } from "./rng.js";
 import { describeEffect } from "./text.js";
+import {
+  alivePlayers,
+  attackablePlayers,
+  baseOwner,
+  isOutpost,
+  nextAlive,
+  targetableBases,
+} from "./targeting.js";
 
 export class GameError extends Error {}
 
 function fail(message: string): never {
   throw new GameError(message);
-}
-
-export function other(pi: PlayerIndex): PlayerIndex {
-  return pi === 0 ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,10 +66,6 @@ export function cardFactions(card: CardInstance): Faction[] {
     return copied === base ? [base] : [base, copied];
   }
   return [base];
-}
-
-export function isOutpost(card: CardInstance): boolean {
-  return Boolean(getCardDef(card.defId).outpost);
 }
 
 export function baseDefense(card: CardInstance): number {
@@ -86,18 +87,6 @@ const SIMPLE_EFFECTS = new Set<Effect["kind"]>([
 /** True when resolving these effects never requires player input. */
 export function isSimpleEffects(effects: Effect[]): boolean {
   return effects.every((e) => SIMPLE_EFFECTS.has(e.kind));
-}
-
-/** Opponent bases the given player may currently target (outposts first). */
-export function targetableBases(state: GameState, attacker: PlayerIndex): CardInstance[] {
-  const opp = state.players[other(attacker)];
-  const outposts = opp.bases.filter(isOutpost);
-  return outposts.length > 0 ? outposts : opp.bases;
-}
-
-export function canAttackPlayer(state: GameState, attacker: PlayerIndex): boolean {
-  const opp = state.players[other(attacker)];
-  return !opp.bases.some(isOutpost);
 }
 
 export function hasAlly(p: PlayerState, card: CardInstance): boolean {
@@ -140,30 +129,47 @@ function newPlayer(id: string, name: string, isBot: boolean): PlayerState {
     shipCombatBonus: 0,
     used: {},
     factionsPlayed: {},
+    eliminated: false,
+    turnsTaken: 0,
   };
+}
+
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 4;
+
+/**
+ * Opening hand sizes in turn order, starting with the first player: 3 then 5 in a
+ * duel; with more players the second draws 4 and the rest 5 (official rules).
+ */
+export function firstTurnHandSizes(n: number): number[] {
+  return Array.from({ length: n }, (_, i) =>
+    i === 0 ? FIRST_TURN_HAND_SIZE : i === 1 && n > 2 ? 4 : HAND_SIZE,
+  );
 }
 
 export type CreateGameOptions = {
   id: string;
   seed: number;
-  players: [
-    { id: string; name: string; isBot?: boolean },
-    { id: string; name: string; isBot?: boolean },
-  ];
+  /** Seat order, which is also turn order. 2 to 4 players. */
+  players: { id: string; name: string; isBot?: boolean }[];
+  /** Ignored with 2 players. Defaults to free-for-all. */
+  variant?: GameVariant;
   /** Which player takes the first turn. Random when omitted. */
   first?: PlayerIndex;
 };
 
 export function createGame(opts: CreateGameOptions): GameState {
+  const n = opts.players.length;
+  if (n < MIN_PLAYERS || n > MAX_PLAYERS) {
+    throw new Error(`A game needs ${MIN_PLAYERS} to ${MAX_PLAYERS} players.`);
+  }
   const state: GameState = {
     id: opts.id,
     seed: opts.seed,
     turn: 0,
     current: 0,
-    players: [
-      newPlayer(opts.players[0].id, opts.players[0].name, Boolean(opts.players[0].isBot)),
-      newPlayer(opts.players[1].id, opts.players[1].name, Boolean(opts.players[1].isBot)),
-    ],
+    variant: opts.variant ?? "ffa",
+    players: opts.players.map((p) => newPlayer(p.id, p.name, Boolean(p.isBot))),
     tradeDeck: [],
     tradeRow: [],
     explorers: EXPLORER_COUNT,
@@ -172,6 +178,7 @@ export function createGame(opts: CreateGameOptions): GameState {
     log: [],
     winner: null,
     gameOverReason: null,
+    eliminationOrder: [],
     uidCounter: 0,
     startedAt: Date.now(),
   };
@@ -189,13 +196,15 @@ export function createGame(opts: CreateGameOptions): GameState {
     shuffleInPlace(state, p.deck);
   }
 
-  const first = opts.first ?? (shuffleInPlace(state, [0, 1] as PlayerIndex[])[0] as PlayerIndex);
+  const seats = state.players.map((_, i) => i);
+  const first = opts.first ?? shuffleInPlace(state, seats)[0]!;
+  if (!Number.isInteger(first) || first < 0 || first >= n) throw new Error("Invalid first player.");
   state.current = first;
   state.turn = 1;
 
   log(state, null, `Game started. ${state.players[first].name} goes first.`);
-  drawCards(state, first, FIRST_TURN_HAND_SIZE);
-  drawCards(state, other(first), HAND_SIZE);
+  firstTurnHandSizes(n).forEach((size, offset) => drawCards(state, (first + offset) % n, size));
+  state.players[first].turnsTaken = 1;
   log(state, first, `Turn 1: ${state.players[first].name}'s turn.`);
 
   return state;
@@ -253,6 +262,12 @@ function queueChoice(state: GameState, choice: DistributiveOmit<Choice, "id">) {
   state.choices.push({ ...choice, id } as Choice);
 }
 
+function forceDiscard(state: GameState, target: PlayerIndex, amount: number): string {
+  const t = state.players[target];
+  t.pendingDiscard += amount;
+  return `${t.name} must discard ${amount}`;
+}
+
 /**
  * Resolves effects in order. Immediate effects apply right away; effects that
  * need input queue a Choice. Returns short descriptions of what happened.
@@ -278,7 +293,6 @@ function resolveEffect(
   source: CardInstance,
 ): string | null {
   const p = state.players[pi];
-  const opp = state.players[other(pi)];
   const sourceDef = getCardDef(source.defId);
   const common = { player: pi, sourceDefId: sourceDef.id, sourceUid: source.uid };
 
@@ -296,9 +310,20 @@ function resolveEffect(
       const n = drawCards(state, pi, e.amount);
       return n > 0 ? `draws ${n}` : null;
     }
-    case "opponent_discard":
-      opp.pendingDiscard += e.amount;
-      return `${opp.name} must discard ${e.amount}`;
+    case "opponent_discard": {
+      const targets = attackablePlayers(state, pi);
+      if (targets.length === 0) return null;
+      if (targets.length === 1) return forceDiscard(state, targets[0]!, e.amount);
+      queueChoice(state, {
+        ...common,
+        type: "select_player",
+        prompt: `Choose an opponent to discard ${e.amount} at the start of their turn.`,
+        candidates: targets,
+        then: "opponent_discard",
+        amount: e.amount,
+      });
+      return null;
+    }
     case "scrap_hand_or_discard": {
       const candidates = [...p.hand, ...p.discard].map((c) => c.uid);
       if (candidates.length === 0) return null;
@@ -535,8 +560,13 @@ function buy(state: GameState, pi: PlayerIndex, slot: number | "explorer") {
 
 function attackBase(state: GameState, pi: PlayerIndex, uid: string) {
   const p = state.players[pi];
-  const opp = state.players[other(pi)];
-  const base = opp.bases.find((c) => c.uid === uid) ?? fail("That base is not in play.");
+  const owner = baseOwner(state, pi, uid);
+  if (owner === null) {
+    const inPlay = state.players.some((o, i) => i !== pi && o.bases.some((c) => c.uid === uid));
+    fail(inPlay ? "You can't attack that player's bases." : "That base is not in play.");
+  }
+  const opp = state.players[owner];
+  const base = opp.bases.find((c) => c.uid === uid)!;
   const def = getCardDef(base.defId);
   const defense = def.defense ?? 0;
   if (!def.outpost && opp.bases.some(isOutpost)) fail("You must destroy outposts first.");
@@ -548,16 +578,26 @@ function attackBase(state: GameState, pi: PlayerIndex, uid: string) {
   log(state, pi, `${p.name} destroys ${opp.name}'s ${def.name}.`);
 }
 
-function attackPlayer(state: GameState, pi: PlayerIndex) {
+function attackPlayer(state: GameState, pi: PlayerIndex, target?: PlayerIndex, amount?: number) {
   const p = state.players[pi];
-  const opp = state.players[other(pi)];
+  const targets = attackablePlayers(state, pi);
+  if (target === undefined) {
+    if (targets.length !== 1) fail("Choose a player to attack.");
+    target = targets[0]!;
+  } else if (!targets.includes(target)) {
+    fail("You can't attack that player.");
+  }
+  const opp = state.players[target];
   if (opp.bases.some(isOutpost)) fail("You must destroy outposts first.");
   if (p.combat <= 0) fail("You have no combat to attack with.");
-  const dmg = p.combat;
+  const dmg = amount ?? p.combat;
+  if (!Number.isInteger(dmg) || dmg < 1 || dmg > p.combat) {
+    fail(`Attack for between 1 and ${p.combat}.`);
+  }
   opp.authority -= dmg;
-  p.combat = 0;
+  p.combat -= dmg;
   log(state, pi, `${p.name} attacks ${opp.name} for ${dmg} (${Math.max(opp.authority, 0)} left).`);
-  if (opp.authority <= 0) endGame(state, pi, `${opp.name} was reduced to 0 authority.`);
+  if (opp.authority <= 0) eliminate(state, target, `${opp.name} was reduced to 0 authority.`);
 }
 
 function activateBase(state: GameState, pi: PlayerIndex, uid: string) {
@@ -597,10 +637,51 @@ function endGame(state: GameState, winner: PlayerIndex, reason: string) {
   log(state, null, `${state.players[winner].name} wins! ${reason}`);
 }
 
+/**
+ * Knocks a player out: they take no more turns and can't be targeted. The game
+ * ends when one player is left; otherwise their bases leave play and play moves
+ * on if it was their turn.
+ */
+function eliminate(state: GameState, pi: PlayerIndex, reason: string) {
+  const p = state.players[pi];
+  p.eliminated = true;
+  p.pendingDiscard = 0;
+  state.eliminationOrder.push(pi);
+  const alive = alivePlayers(state);
+  if (alive.length === 1) {
+    endGame(state, alive[0]!, reason);
+    return;
+  }
+  for (const base of p.bases) delete base.copyOf;
+  p.discard.push(...p.bases);
+  p.bases = [];
+  log(state, pi, `${p.name} is eliminated. ${reason}`);
+
+  if (state.current === pi) {
+    state.choices = [];
+    clearTurn(p);
+    passTurn(state, pi);
+    return;
+  }
+  // The current player's pending choices may point at what was just removed.
+  const baseUids = new Set(state.players.flatMap((o) => o.bases.map((c) => c.uid)));
+  state.choices = state.choices.flatMap((c): Choice[] => {
+    if (c.type === "select_player") {
+      const candidates = c.candidates.filter((i) => i !== pi);
+      return candidates.length > 0 ? [{ ...c, candidates }] : [];
+    }
+    if (c.type === "select_cards" && c.then === "destroy_base") {
+      return [{ ...c, candidates: c.candidates.filter((uid) => baseUids.has(uid)) }];
+    }
+    return [c];
+  });
+}
+
 function startTurn(state: GameState, pi: PlayerIndex) {
   const p = state.players[pi];
   p.used = {};
   p.factionsPlayed = {};
+  p.turnsTaken += 1;
   log(state, pi, `Turn ${state.turn}: ${p.name}'s turn.`);
 
   if (p.pendingDiscard > 0) {
@@ -624,8 +705,8 @@ function startTurn(state: GameState, pi: PlayerIndex) {
   checkAllies(state, pi);
 }
 
-function endTurn(state: GameState, pi: PlayerIndex) {
-  const p = state.players[pi];
+/** Discards everything in play and in hand and resets per-turn counters. */
+function clearTurn(p: PlayerState) {
   for (const c of p.inPlay) delete c.copyOf;
   p.discard.push(...p.inPlay, ...p.hand);
   p.inPlay = [];
@@ -636,12 +717,20 @@ function endTurn(state: GameState, pi: PlayerIndex) {
   p.shipCombatBonus = 0;
   p.used = {};
   p.factionsPlayed = {};
-  drawCards(state, pi, HAND_SIZE);
-  log(state, pi, `${p.name} ends their turn.`);
+}
 
-  state.current = other(pi);
+function passTurn(state: GameState, from: PlayerIndex) {
+  state.current = nextAlive(state, from);
   state.turn += 1;
   startTurn(state, state.current);
+}
+
+function endTurn(state: GameState, pi: PlayerIndex) {
+  const p = state.players[pi];
+  clearTurn(p);
+  drawCards(state, pi, HAND_SIZE);
+  log(state, pi, `${p.name} ends their turn.`);
+  passTurn(state, pi);
 }
 
 function resolveChoice(
@@ -654,7 +743,20 @@ function resolveChoice(
   if (choice.id !== choiceId) fail("That choice is no longer active.");
   if (choice.player !== pi) fail("That choice is not yours to make.");
   const p = state.players[pi];
-  const opp = state.players[other(pi)];
+
+  if (choice.type === "select_player") {
+    if (!("player" in resolution)) fail("Expected a player.");
+    if (!choice.candidates.includes(resolution.player)) fail("Invalid player.");
+    state.choices.shift();
+    const desc = forceDiscard(state, resolution.player, choice.amount);
+    const srcName = choice.sourceDefId ? getCardDef(choice.sourceDefId).name : "";
+    log(
+      state,
+      pi,
+      `${p.name} targets ${state.players[resolution.player].name}${srcName ? ` with ${srcName}` : ""}: ${desc}.`,
+    );
+    return;
+  }
 
   if (choice.type === "choose_option") {
     if (!("option" in resolution)) fail("Expected an option.");
@@ -728,7 +830,9 @@ function resolveChoice(
         log(state, pi, `${p.name} destroys nothing.`);
         break;
       }
-      const base = removeFrom(opp.bases, uid) ?? fail("Base not found.");
+      const owner = baseOwner(state, pi, uid) ?? fail("Base not found.");
+      const opp = state.players[owner];
+      const base = removeFrom(opp.bases, uid)!;
       delete base.copyOf;
       opp.discard.push(base);
       log(state, pi, `${p.name} destroys ${opp.name}'s ${getCardDef(base.defId).name}.`);
@@ -820,8 +924,10 @@ export function applyAction(
   if (input.winner !== null) return { ok: false, error: "The game is over." };
   const state = structuredClone(input);
   try {
+    const me = state.players[player] ?? fail("Invalid player.");
+    if (me.eliminated) fail("You have been eliminated.");
     if (action.type === "concede") {
-      endGame(state, other(player), `${state.players[player].name} conceded.`);
+      eliminate(state, player, `${me.name} conceded.`);
       return { ok: true, state };
     }
     if (player !== state.current) fail("It's not your turn.");
@@ -839,7 +945,7 @@ export function applyAction(
         buy(state, player, action.slot);
         break;
       case "attack_player":
-        attackPlayer(state, player);
+        attackPlayer(state, player, action.target, action.amount);
         break;
       case "attack_base":
         attackBase(state, player, action.uid);
