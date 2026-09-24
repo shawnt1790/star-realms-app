@@ -4,6 +4,9 @@ A browser implementation of the Star Realms deck-building game: play against the
 computer, quick-match a stranger, or open a private room and share the code with a
 friend. No accounts, no downloads.
 
+### PLAY NOW @ [deckwars.io](https://deckwars.io) !! 
+Any feedback would be appreciated so that I can improve this project :)
+
 ## Features
 
 - Full base-set rules engine (80-card trade deck, Explorers, allies, outposts,
