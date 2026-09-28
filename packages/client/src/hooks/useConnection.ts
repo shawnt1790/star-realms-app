@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GameView, PlayerAction, RoomState, TableOptions } from "@sr/shared";
 import { socket } from "../api/socket";
-import { getOrCreatePlayerId, loadRoomCode, saveRoomCode } from "../identity";
+import {
+  getOrCreatePlayerId,
+  loadRoomCode,
+  roomCodeIsRecent,
+  saveRoomCode,
+  touchRoomCode,
+} from "../identity";
 import { trackEvent } from "../analytics";
 
 export type Screen = "home" | "lobby" | "game";
@@ -87,10 +93,11 @@ export function useConnection() {
       if (saved) {
         socket.emit("room:reconnect", { code: saved, playerId }, (res) => {
           if (res.ok) return;
+          const recent = roomCodeIsRecent();
           saveRoomCode(null);
           setRoom(null);
           setView(null);
-          showToast("That game is no longer available.");
+          if (recent) showToast("That game is no longer available.");
         });
         return;
       }
@@ -105,6 +112,7 @@ export function useConnection() {
       }
     }
     function onDisconnect() {
+      touchRoomCode();
       setConnected(false);
       setQueueWaiting(false);
     }
@@ -116,6 +124,8 @@ export function useConnection() {
     // Phones suspend background tabs; retry straight away when the player comes back
     // instead of waiting out the reconnect backoff.
     function retry() {
+      // Leaving the page (or backgrounding it) is the last time the room was in use.
+      if (document.visibilityState === "hidden") return touchRoomCode();
       if (!replacedRef.current && !socket.connected && document.visibilityState === "visible") {
         socket.connect();
       }
