@@ -8,10 +8,30 @@ export type Screen = "home" | "lobby" | "game";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
+const OFFLINE = { ok: false, error: "Not connected." } as const;
+
+/** Local timestamps when each disconnected player's seat will be given up. */
+export type GraceDeadlines = Record<string, number>;
+
+function graceDeadlines(room: RoomState): GraceDeadlines {
+  const now = Date.now();
+  const out: GraceDeadlines = {};
+  for (const p of room.players) {
+    if (p.reconnectMsLeft !== null) out[p.id] = now + p.reconnectMsLeft;
+  }
+  return out;
+}
+
 export function useConnection() {
   const playerId = useMemo(() => getOrCreatePlayerId(), []);
   const [connected, setConnected] = useState(socket.connected);
   const [room, setRoom] = useState<RoomState | null>(null);
+  const [deadlines, setDeadlines] = useState<GraceDeadlines>({});
+  /** Another tab or device took this player's seat; stay offline until they reclaim it. */
+  const [replaced, setReplaced] = useState(false);
+  const replacedRef = useRef(false);
+  /** Quick-match request to resend if the connection drops while waiting. */
+  const queuedRef = useRef<{ name: string; table?: TableOptions } | null>(null);
   const [view, setView] = useState<GameView | null>(null);
   const [queueWaiting, setQueueWaiting] = useState(false);
   /** Players still needed before a quick match starts. */
@@ -45,7 +65,9 @@ export function useConnection() {
         gameTrackedRef.current.finished = true;
         trackEvent("game_finished", tags(room));
       }
+      queuedRef.current = null;
       setRoom(room);
+      setDeadlines(graceDeadlines(room));
       saveRoomCode(room.code);
       if (room.status === "lobby") setView(null);
     }
@@ -62,18 +84,41 @@ export function useConnection() {
     function onConnect() {
       setConnected(true);
       const saved = loadRoomCode();
-      if (!saved) return;
-      socket.emit("room:reconnect", { code: saved, playerId }, (res) => {
-        if (!res.ok) {
+      if (saved) {
+        socket.emit("room:reconnect", { code: saved, playerId }, (res) => {
+          if (res.ok) return;
           saveRoomCode(null);
           setRoom(null);
           setView(null);
-        }
-      });
+          showToast("That game is no longer available.");
+        });
+        return;
+      }
+      // The server drops queued players whose connection closes; get back in line.
+      const queued = queuedRef.current;
+      if (queued) {
+        socket.emit("queue:join", { name: queued.name, playerId, ...queued.table }, (res) => {
+          if (res.ok) return;
+          queuedRef.current = null;
+          showToast(res.error);
+        });
+      }
     }
     function onDisconnect() {
       setConnected(false);
       setQueueWaiting(false);
+    }
+    function onReplaced() {
+      replacedRef.current = true;
+      setReplaced(true);
+      socket.disconnect();
+    }
+    // Phones suspend background tabs; retry straight away when the player comes back
+    // instead of waiting out the reconnect backoff.
+    function retry() {
+      if (!replacedRef.current && !socket.connected && document.visibilityState === "visible") {
+        socket.connect();
+      }
     }
 
     socket.on("room:state", onRoomState);
@@ -82,6 +127,9 @@ export function useConnection() {
     socket.on("error:toast", onToast);
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
+    socket.on("session:replaced", onReplaced);
+    document.addEventListener("visibilitychange", retry);
+    window.addEventListener("online", retry);
     socket.connect();
 
     return () => {
@@ -91,6 +139,9 @@ export function useConnection() {
       socket.off("error:toast", onToast);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
+      socket.off("session:replaced", onReplaced);
+      document.removeEventListener("visibilitychange", retry);
+      window.removeEventListener("online", retry);
       socket.disconnect();
     };
   }, [playerId, showToast]);
@@ -119,27 +170,36 @@ export function useConnection() {
 
   const quickMatch = useCallback(
     (name: string, table?: TableOptions) => {
+      queuedRef.current = { name, table };
       socket.emit("queue:join", { name, playerId, ...table }, (res) => {
-        if (!res.ok) showToast(res.error);
+        if (res.ok) return;
+        queuedRef.current = null;
+        showToast(res.error);
       });
     },
     [playerId, showToast],
   );
 
   const cancelQueue = useCallback(() => {
+    queuedRef.current = null;
+    if (!socket.connected) return setQueueWaiting(false);
     socket.emit("queue:leave", { playerId }, () => setQueueWaiting(false));
   }, [playerId]);
 
   const leaveRoom = useCallback(() => {
-    socket.emit("room:leave", { playerId }, () => {
+    const clear = () => {
       saveRoomCode(null);
       setRoom(null);
       setView(null);
-    });
+    };
+    // Offline, just go home: the server gives the seat up when the grace period ends.
+    if (!socket.connected) return clear();
+    socket.emit("room:leave", { playerId }, clear);
   }, [playerId]);
 
   const setReady = useCallback(
     (ready: boolean) => {
+      if (!socket.connected) return showToast(OFFLINE.error);
       socket.emit("room:ready", { playerId, ready }, (res) => {
         if (!res.ok) showToast(res.error);
       });
@@ -148,6 +208,7 @@ export function useConnection() {
   );
 
   const startGame = useCallback(() => {
+    if (!socket.connected) return showToast(OFFLINE.error);
     socket.emit("room:start", (res) => {
       if (!res.ok) showToast(res.error);
     });
@@ -156,6 +217,9 @@ export function useConnection() {
   const sendAction = useCallback(
     (action: PlayerAction) =>
       new Promise<ActionResult>((resolve) => {
+        // Socket.IO would queue this and send it after reconnecting, before we've
+        // rejoined the room, so refuse it instead of letting it fail or land late.
+        if (!socket.connected) return resolve(OFFLINE);
         socket.emit("game:action", { action }, (res) => {
           if (!res.ok) showToast(res.error);
           resolve(res);
@@ -163,6 +227,13 @@ export function useConnection() {
       }),
     [showToast],
   );
+
+  /** Take the seat back from whichever tab or device replaced this one. */
+  const reclaimSeat = useCallback(() => {
+    replacedRef.current = false;
+    setReplaced(false);
+    socket.connect();
+  }, []);
 
   const screen: Screen = !room
     ? "home"
@@ -176,6 +247,9 @@ export function useConnection() {
     room,
     view,
     screen,
+    deadlines,
+    replaced,
+    reclaimSeat,
     queueWaiting,
     queueNeeded,
     toast,

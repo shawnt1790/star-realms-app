@@ -17,6 +17,12 @@ export type PlayerSummary = {
   isBot: boolean;
   connected: boolean;
   ready: boolean;
+  /**
+   * While disconnected: milliseconds left (as of this update) before their seat is
+   * given up. Null when connected, or when the countdown is paused because nobody
+   * in the room is connected.
+   */
+  reconnectMsLeft: number | null;
 };
 
 export type RoomState = {
@@ -56,4 +62,6 @@ export type ServerToClientEvents = {
   /** `needed`: how many more players the queue needs before a game starts. */
   "queue:status": (payload: { waiting: boolean; needed?: number }) => void;
   "error:toast": (payload: { message: string }) => void;
+  /** This socket's seat was taken over by another tab or device with the same player id. */
+  "session:replaced": () => void;
 };

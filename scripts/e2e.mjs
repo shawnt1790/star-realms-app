@@ -1,11 +1,13 @@
 // End-to-end smoke test against a running server.
 //
-//   PORT=3002 BOT_STEP_MS=5 node packages/server/dist/index.js &
+//   PORT=3002 BOT_STEP_MS=5 RECONNECT_GRACE_MS=1500 node packages/server/dist/index.js &
 //   node scripts/e2e.mjs http://localhost:3002
 //   node scripts/e2e.mjs https://deckwars.io quick4   # run only the named tests
 //
-// Tests: private, quick, solo, private4, solo4, quick4. solo4 plays a whole game
-// against 3 bots, which needs a fast BOT_STEP_MS; against production use the others.
+// Tests: private, quick, solo, private4, solo4, quick4, grace, grace2, grace3. solo4
+// plays a whole game against 3 bots, which needs a fast BOT_STEP_MS; against
+// production use the others. The grace tests only check seats being given up when
+// the server's RECONNECT_GRACE_MS is short (a few seconds); otherwise they skip that.
 //
 // Exercises: private room lobby, ready/start, a full human-vs-human game driven by
 // the bot heuristics through the socket API, quick-match pairing, solo vs bot,
@@ -36,6 +38,8 @@ function connect() {
     view: null,
     queue: null,
     needed: null,
+    replaced: false,
+    toasts: [],
     waiters: [],
     emit(event, ...args) {
       return new Promise((resolve) => socket.emit(event, ...args, resolve));
@@ -67,6 +71,14 @@ function connect() {
   });
   socket.on("game:state", ({ view }) => {
     client.view = view;
+    client.notify();
+  });
+  socket.on("session:replaced", () => {
+    client.replaced = true;
+    client.notify();
+  });
+  socket.on("error:toast", ({ message }) => {
+    client.toasts.push(message);
     client.notify();
   });
   socket.on("queue:status", ({ waiting, needed }) => {
@@ -321,6 +333,153 @@ async function testQuickMatchFour() {
   for (const c of [duo, ...clients]) c.socket.close();
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const player = (c, id) => c.room?.players.find((p) => p.id === id);
+/** Grace periods longer than this are left to run out in production, not here. */
+const SHORT_GRACE_MS = 5000;
+
+/** Creates a private room of `ids.length` humans; starts the game when `start` is set. */
+async function privateTable(ids, start) {
+  const clients = [];
+  for (let i = 0; i < ids.length; i++) clients.push(await connect());
+  const created = await clients[0].emit("room:create", {
+    name: ids[0],
+    playerId: `p-${ids[0]}`,
+    mode: "private",
+    maxPlayers: ids.length,
+  });
+  for (let i = 1; i < ids.length; i++) {
+    await clients[i].emit("room:join", {
+      code: created.code,
+      name: ids[i],
+      playerId: `p-${ids[i]}`,
+    });
+  }
+  await clients[0].waitFor((c) => c.room?.players.length === ids.length);
+  if (start) {
+    for (let i = 0; i < ids.length; i++) {
+      await clients[i].emit("room:ready", { playerId: `p-${ids[i]}`, ready: true });
+    }
+    await clients[0].waitFor((c) => c.room.players.every((p) => p.ready));
+    await clients[0].emit("room:start");
+    for (const c of clients) await c.waitFor((x) => x.view !== null);
+  }
+  return { code: created.code, clients };
+}
+
+async function testGraceLobby() {
+  console.log("reconnect grace: lobby");
+  const {
+    code,
+    clients: [host, guest],
+  } = await privateTable(["GH", "GG"], false);
+
+  // The host drops: the guest stays, sees a countdown, and becomes host.
+  host.socket.close();
+  await guest.waitFor((c) => player(c, "p-GH")?.connected === false);
+  const left = player(guest, "p-GH").reconnectMsLeft;
+  assert(typeof left === "number" && left > 0, "guest sees the host's reconnect countdown");
+  assert(player(guest, "p-GG").isHost, "host passes to the connected guest");
+
+  // The host comes back in time and keeps their seat.
+  const host2 = await connect();
+  const rc = await host2.emit("room:reconnect", { code, playerId: "p-GH" });
+  assert(rc.ok, "host rejoins within the grace period");
+  await guest.waitFor((c) => player(c, "p-GH")?.connected === true);
+  assert(player(guest, "p-GH").reconnectMsLeft === null, "countdown clears on return");
+  assert(player(guest, "p-GG").isHost, "new host keeps host");
+
+  // A second tab with the same player id takes the seat; the first is told.
+  const host3 = await connect();
+  const rc3 = await host3.emit("room:reconnect", { code, playerId: "p-GH" });
+  assert(rc3.ok, "second tab takes the seat");
+  await host2.waitFor((c) => c.replaced);
+  assert(host2.replaced, "first tab is told it was replaced");
+  const stale = await host2.emit("room:ready", { playerId: "p-GH", ready: true });
+  assert(!stale.ok, "replaced tab can no longer act");
+
+  if (left > SHORT_GRACE_MS) {
+    console.log("  - skipping expiry (server grace period is long)");
+  } else {
+    host3.socket.close();
+    await guest.waitFor((c) => c.room.players.length === 1, left + 5000);
+    assert(!player(guest, "p-GH"), "host is removed when the grace period runs out");
+    const late = await connect();
+    const lateRc = await late.emit("room:reconnect", { code, playerId: "p-GH" });
+    assert(!lateRc.ok, "late return is turned away");
+    late.socket.close();
+  }
+  for (const c of [host, host2, host3, guest]) c.socket.close();
+}
+
+async function testGraceDuel() {
+  console.log("reconnect grace: 2-player game");
+  const {
+    code,
+    clients: [a, b],
+  } = await privateTable(["DA", "DB"], true);
+
+  // A drops mid-game and returns in time: the game carries on.
+  a.socket.close();
+  await b.waitFor((c) => player(c, "p-DA")?.connected === false);
+  const left = player(b, "p-DA").reconnectMsLeft;
+  assert(left > 0, "opponent sees the countdown");
+  const a2 = await connect();
+  assert((await a2.emit("room:reconnect", { code, playerId: "p-DA" })).ok, "rejoined mid-game");
+  await a2.waitFor((c) => c.view !== null);
+  assert(a2.room.status === "in_game" && a2.view.winner === null, "game still on after rejoin");
+
+  if (left > SHORT_GRACE_MS) {
+    console.log("  - skipping expiry (server grace period is long)");
+    for (const c of [a, a2, b]) c.socket.close();
+    return;
+  }
+
+  // Both drop at once: nobody is connected, so nobody concedes.
+  a2.socket.close();
+  b.socket.close();
+  await sleep(left + 1000);
+  const b2 = await connect();
+  assert((await b2.emit("room:reconnect", { code, playerId: "p-DB" })).ok, "room survives");
+  await b2.waitFor((c) => c.view !== null && c.room !== null);
+  assert(b2.room.status === "in_game" && b2.room.players.length === 2, "no one conceded");
+  assert(player(b2, "p-DA").reconnectMsLeft > 0, "A's countdown restarts once B is back");
+
+  // A never returns: they concede and B wins, and B stays on the result screen.
+  await b2.waitFor((c) => c.view.winner !== null, left + 5000);
+  assert(b2.view.winner === b2.view.me, "remaining player wins");
+  await b2.waitFor((c) => c.room.status === "finished");
+  assert(b2.room.status === "finished", "room shows the result instead of the lobby");
+  const told = (c) => c.toasts.some((m) => m.includes("DA didn't reconnect and conceded"));
+  await b2.waitFor(told).catch(() => {});
+  assert(told(b2), "remaining player is told why");
+  for (const c of [a, a2, b, b2]) c.socket.close();
+}
+
+async function testGraceThree() {
+  console.log("reconnect grace: 3-player game");
+  const {
+    clients: [a, b, c],
+  } = await privateTable(["TA", "TB", "TC"], true);
+  const seatOf = (id) => a.view.players.findIndex((p) => p.id === id);
+
+  c.socket.close();
+  await a.waitFor((x) => player(x, "p-TC")?.connected === false);
+  const left = player(a, "p-TC").reconnectMsLeft;
+  if (left > SHORT_GRACE_MS) {
+    console.log("  - skipping expiry (server grace period is long)");
+    for (const x of [a, b, c]) x.socket.close();
+    return;
+  }
+  await a.waitFor((x) => x.view.players[seatOf("p-TC")].eliminated, left + 5000);
+  assert(a.room.status === "in_game", "2 connected players play on after the third concedes");
+
+  b.socket.close();
+  await a.waitFor((x) => x.view.winner !== null, left + 5000);
+  assert(a.view.winner === a.view.me, "last connected player wins");
+  for (const x of [a, b, c]) x.socket.close();
+}
+
 const tests = {
   private: testPrivateRoomGame,
   quick: testQuickMatch,
@@ -328,6 +487,9 @@ const tests = {
   private4: testFourPlayerRoom,
   solo4: testSoloFour,
   quick4: testQuickMatchFour,
+  grace: testGraceLobby,
+  grace2: testGraceDuel,
+  grace3: testGraceThree,
 };
 
 try {

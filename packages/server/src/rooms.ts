@@ -28,6 +28,9 @@ export type Player = {
   connected: boolean;
   ready: boolean;
   isBot: boolean;
+  /** While disconnected: when their seat is given up (see RECONNECT_GRACE_MS). */
+  graceDeadline: number | null;
+  graceTimer: NodeJS.Timeout | null;
 };
 
 export type Room = {
@@ -54,6 +57,11 @@ export type IO = Server<ClientToServerEvents, ServerToClientEvents>;
 const BOT_NAMES = ["HAL", "Unit 7", "Overseer", "Cortex", "Nebula", "Vex"];
 const BOT_STEP_MS = Number(process.env.BOT_STEP_MS ?? 650);
 const ROOM_TTL_MS = 15 * 60 * 1000;
+/**
+ * How long a dropped player's seat is held. After that they're removed from the
+ * lobby, or concede if a game is on, exactly as if they had pressed Leave.
+ */
+const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS ?? 60 * 1000);
 const MAX_NAME = 20;
 
 export function cleanName(name: unknown): string {
@@ -179,6 +187,8 @@ export class RoomManager {
       connected: socketId !== null,
       ready: false,
       isBot: false,
+      graceDeadline: null,
+      graceTimer: null,
     };
     room.players.set(playerId, player);
     return player;
@@ -217,6 +227,8 @@ export class RoomManager {
           connected: true,
           ready: true,
           isBot: true,
+          graceDeadline: null,
+          graceTimer: null,
         });
       }
       this.startGame(room);
@@ -238,9 +250,12 @@ export class RoomManager {
     if (!existing) {
       if (room.status !== "lobby") return { ok: false, error: "That game already started." };
       if (room.players.size >= room.maxPlayers) return { ok: false, error: "That room is full." };
+    } else {
+      this.replaceSocket(room, existing, opts.socketId);
     }
     this.addPlayer(room, opts.playerId, opts.name, opts.socketId);
     this.bindSocket(opts.socketId, room, opts.playerId);
+    this.syncGrace(room);
     this.emitRoomState(room);
     this.emitGameState(room);
     return { ok: true, room };
@@ -255,13 +270,11 @@ export class RoomManager {
     if (!room) return { ok: false, error: "Room not found." };
     const player = room.players.get(opts.playerId);
     if (!player) return { ok: false, error: "You are not in that room." };
-    // Drop any stale socket binding for this player.
-    if (player.socketId && player.socketId !== opts.socketId) {
-      this.unbindSocket(player.socketId, room.code);
-    }
+    this.replaceSocket(room, player, opts.socketId);
     player.socketId = opts.socketId;
     player.connected = true;
     this.bindSocket(opts.socketId, room, opts.playerId);
+    this.syncGrace(room);
     this.emitRoomState(room);
     this.emitGameState(room);
     return { ok: true, room };
@@ -273,9 +286,15 @@ export class RoomManager {
     if (!m) return;
     const room = this.rooms.get(m.code);
     this.unbindSocket(socketId, m.code);
-    if (!room) return;
+    if (room) this.removePlayer(room, playerId);
+  }
+
+  /** Takes a player out of the room: Leave, or a reconnect grace period running out. */
+  private removePlayer(room: Room, playerId: string) {
     const player = room.players.get(playerId);
     if (!player) return;
+    this.clearGrace(player);
+    const wasFinished = room.status === "finished";
 
     // Leaving mid-game counts as a concession; the others play on if 2+ remain.
     if (room.status === "in_game" && room.game && room.seats) {
@@ -292,12 +311,68 @@ export class RoomManager {
       this.destroyRoom(room);
       return;
     }
-    if (room.hostPlayerId === playerId) room.hostPlayerId = humans[0]!.playerId;
-    // A finished game can't be rematched with a missing seat; back to the lobby.
-    if (room.mode !== "solo" && room.status === "finished") this.backToLobby(room);
+    if (room.hostPlayerId === playerId) {
+      room.hostPlayerId = (humans.find((p) => p.connected) ?? humans[0]!).playerId;
+    }
+    // A finished game can't be rematched with a missing seat; back to the lobby. If
+    // this concession is what ended the game, stay on the result so the winner sees it.
+    if (room.mode !== "solo" && wasFinished) this.backToLobby(room);
+    this.syncGrace(room);
     this.emitRoomState(room);
     this.emitGameState(room);
     this.scheduleBot(room);
+  }
+
+  /**
+   * The same player id showed up on a new socket (reconnect, or another tab). Tell the
+   * old socket it lost the seat, so that tab stops acting on a game it no longer owns.
+   */
+  private replaceSocket(room: Room, player: Player, socketId: string) {
+    if (!player.socketId || player.socketId === socketId) return;
+    this.io.to(player.socketId).emit("session:replaced");
+    this.unbindSocket(player.socketId, room.code);
+  }
+
+  // ---------------------------------------------------------------- reconnect grace
+
+  private clearGrace(player: Player) {
+    if (player.graceTimer) clearTimeout(player.graceTimer);
+    player.graceTimer = null;
+    player.graceDeadline = null;
+  }
+
+  /**
+   * Starts a grace timer for every disconnected human who lacks one. The timers are
+   * paused (cleared) while no human is connected, so a shared outage doesn't concede
+   * everyone; the 15-minute sweep handles rooms nobody comes back to. That also means
+   * solo rooms, with one human, never time out.
+   */
+  private syncGrace(room: Room) {
+    const humans = [...room.players.values()].filter((p) => !p.isBot);
+    const anyConnected = humans.some((p) => p.connected);
+    for (const p of humans) {
+      if (p.connected || !anyConnected) {
+        this.clearGrace(p);
+      } else if (!p.graceTimer) {
+        p.graceDeadline = Date.now() + RECONNECT_GRACE_MS;
+        p.graceTimer = setTimeout(() => this.expireGrace(room, p.playerId), RECONNECT_GRACE_MS);
+      }
+    }
+  }
+
+  private expireGrace(room: Room, playerId: string) {
+    const player = room.players.get(playerId);
+    if (!player) return;
+    player.graceTimer = null;
+    if (this.rooms.get(room.code) !== room || player.connected) return;
+    const seat = room.seats?.indexOf(playerId) ?? -1;
+    const conceded =
+      room.status === "in_game" && seat >= 0 && !room.game?.players[seat]?.eliminated;
+    this.removePlayer(room, playerId);
+    if (this.rooms.get(room.code) !== room) return;
+    this.io.to(room.code).emit("error:toast", {
+      message: `${player.name} didn't reconnect${conceded ? " and conceded" : ""}.`,
+    });
   }
 
   private backToLobby(room: Room) {
@@ -327,6 +402,7 @@ export class RoomManager {
       const alt = [...room.players.values()].find((p) => !p.isBot && p.connected);
       if (alt) room.hostPlayerId = alt.playerId;
     }
+    this.syncGrace(room);
     this.emitRoomState(room);
     this.emitGameState(room);
   }
@@ -551,6 +627,8 @@ export class RoomManager {
         isBot: p.isBot,
         connected: p.connected,
         ready: p.ready,
+        reconnectMsLeft:
+          p.graceDeadline === null ? null : Math.max(p.graceDeadline - Date.now(), 0),
       })),
     };
   }
@@ -572,6 +650,7 @@ export class RoomManager {
   private destroyRoom(room: Room) {
     if (room.botTimer) clearTimeout(room.botTimer);
     for (const p of room.players.values()) {
+      this.clearGrace(p);
       if (p.socketId) this.unbindSocket(p.socketId, room.code);
     }
     this.rooms.delete(room.code);

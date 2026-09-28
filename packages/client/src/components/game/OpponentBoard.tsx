@@ -1,6 +1,8 @@
 import type { CardInstance, GameView, PlayerIndex } from "@sr/shared";
 import { getCardDef } from "@sr/shared";
+import type { GraceDeadlines } from "../../hooks/useConnection";
 import { Card } from "../Card";
+import { DisconnectedChip } from "../DisconnectedChip";
 import type { Act, AttackControl, OnHover } from "./types";
 
 type Props = {
@@ -11,10 +13,20 @@ type Props = {
   attack: AttackControl;
   act: Act;
   onHover: OnHover;
+  deadlines: GraceDeadlines;
 };
 
 /** Bases and ships in play for one opponent: the whole top zone in a duel. */
-export function OpponentBoard({ view, seat, myTurn, blocked, attack, act, onHover }: Props) {
+export function OpponentBoard({
+  view,
+  seat,
+  myTurn,
+  blocked,
+  attack,
+  act,
+  onHover,
+  deadlines,
+}: Props) {
   const opp = view.players[seat]!;
   const me = view.players[view.me]!;
   const oppHasOutpost = opp.bases.some((b) => getCardDef(b.defId).outpost);
@@ -35,7 +47,7 @@ export function OpponentBoard({ view, seat, myTurn, blocked, attack, act, onHove
           {opp.name}
           {opp.isBot && <span className="chip">bot</span>}
           {opp.eliminated && <span className="chip warn">out</span>}
-          {!opp.connected && !opp.isBot && <span className="chip warn">disconnected</span>}
+          {!opp.connected && !opp.isBot && <DisconnectedChip deadline={deadlines[opp.id]} />}
         </div>
         <div className="authority">
           <span className="big">{Math.max(opp.authority, 0)}</span>
