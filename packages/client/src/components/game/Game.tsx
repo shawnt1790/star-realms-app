@@ -150,7 +150,15 @@ export function Game({ conn, view, room }: Props) {
 
   return (
     <div className={`game ${multi ? "multi" : ""}`}>
-      {multi && <SeatStrip view={view} seats={opponents} focused={focused} onFocus={focusSeat} />}
+      {multi && (
+        <SeatStrip
+          view={view}
+          seats={opponents}
+          focused={focused}
+          onFocus={focusSeat}
+          deadlines={conn.deadlines}
+        />
+      )}
       <OpponentBoard
         view={view}
         seat={focused}
@@ -159,6 +167,7 @@ export function Game({ conn, view, room }: Props) {
         attack={attack}
         act={act}
         onHover={setPreview}
+        deadlines={conn.deadlines}
       />
       <Market view={view} myTurn={myTurn} blocked={blocked} act={act} onHover={setPreview} />
       <MyBoard view={view} myTurn={myTurn} blocked={blocked} act={act} onHover={setPreview} />

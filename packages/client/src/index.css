@@ -209,6 +209,15 @@ input:focus {
   z-index: 100;
 }
 
+/* Nothing works until the socket is back, so don't let anyone try. */
+.app.offline > :not(.banner):not(.toast) {
+  pointer-events: none;
+  opacity: 0.55;
+}
+.modal-backdrop.replaced {
+  z-index: 110;
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;

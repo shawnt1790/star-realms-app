@@ -1,5 +1,7 @@
 import type { GameView, PlayerIndex } from "@sr/shared";
 import { getCardDef } from "@sr/shared";
+import type { GraceDeadlines } from "../../hooks/useConnection";
+import { DisconnectedChip } from "../DisconnectedChip";
 
 type Props = {
   view: GameView;
@@ -7,6 +9,7 @@ type Props = {
   seats: PlayerIndex[];
   focused: PlayerIndex;
   onFocus: (seat: PlayerIndex) => void;
+  deadlines: GraceDeadlines;
 };
 
 /**
@@ -14,7 +17,7 @@ type Props = {
  * chips for what the variant lets me do to them. Clicking a card focuses that
  * opponent's board (and makes them the attack target on my turn).
  */
-export function SeatStrip({ view, seats, focused, onFocus }: Props) {
+export function SeatStrip({ view, seats, focused, onFocus, deadlines }: Props) {
   const hunter = view.variant === "hunter";
   return (
     <nav className="seat-strip" aria-label="Opponents">
@@ -72,7 +75,7 @@ export function SeatStrip({ view, seats, focused, onFocus }: Props) {
               {hunter && view.huntedBy === i && <span className="chip hunter">hunts you</span>}
               {hunter && basesOnly && <span className="chip">bases only</span>}
               {p.isBot && <span className="chip">bot</span>}
-              {!p.connected && !p.isBot && <span className="chip warn">disconnected</span>}
+              {!p.connected && !p.isBot && <DisconnectedChip deadline={deadlines[p.id]} />}
               {p.eliminated && <span className="chip warn">eliminated</span>}
             </div>
           </button>

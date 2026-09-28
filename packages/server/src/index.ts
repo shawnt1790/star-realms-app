@@ -17,6 +17,10 @@ const httpServer = createServer(app);
 
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] },
+  // Notice a silent drop (phone loses signal) within ~20 s rather than the default
+  // ~45 s, so the reconnect grace period starts close to when the player vanished.
+  pingInterval: 10_000,
+  pingTimeout: 10_000,
 });
 
 const rooms = new RoomManager(io);

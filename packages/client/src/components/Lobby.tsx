@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RoomState } from "@sr/shared";
 import type { Connection } from "../hooks/useConnection";
+import { DisconnectedChip } from "./DisconnectedChip";
 
 export function Lobby({ conn, room }: { conn: Connection; room: RoomState }) {
   const me = room.players.find((p) => p.id === conn.playerId) ?? null;
@@ -43,7 +44,7 @@ export function Lobby({ conn, room }: { conn: Connection; room: RoomState }) {
                 {p.id === conn.playerId ? " (you)" : ""}
               </span>
               {p.isHost && <span className="chip">host</span>}
-              {!p.connected && <span className="chip warn">disconnected</span>}
+              {!p.connected && <DisconnectedChip deadline={conn.deadlines[p.id]} />}
               <span className="status">{p.ready ? "Ready" : "Not ready"}</span>
             </li>
           ))}

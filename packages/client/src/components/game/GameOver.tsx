@@ -1,5 +1,6 @@
 import type { GameView, PlayerIndex, RoomState } from "@sr/shared";
 import type { Connection } from "../../hooks/useConnection";
+import { DisconnectedChip } from "../DisconnectedChip";
 
 type Props = {
   conn: Connection;
@@ -63,13 +64,17 @@ export function GameOver({ conn, view, room, opponents }: Props) {
           const r = room.players.find((rp) => rp.id === p.id);
           return (
             <p key={p.id} className="muted">
-              {!r
-                ? `${p.name} has left.`
-                : !r.connected
-                  ? `${r.name} is disconnected.`
-                  : r.ready
-                    ? `${r.name} wants a rematch.`
-                    : `Waiting for ${r.name}…`}
+              {!r ? (
+                `${p.name} has left.`
+              ) : !r.connected ? (
+                <>
+                  {r.name} lost connection. <DisconnectedChip deadline={conn.deadlines[r.id]} />
+                </>
+              ) : r.ready ? (
+                `${r.name} wants a rematch.`
+              ) : (
+                `Waiting for ${r.name}…`
+              )}
             </p>
           );
         })}
