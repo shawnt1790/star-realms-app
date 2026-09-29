@@ -210,9 +210,31 @@ input:focus {
 }
 
 /* Nothing works until the socket is back, so don't let anyone try. */
-.app.offline > :not(.banner):not(.toast) {
+.app.offline > :not(.banner):not(.toast):not(.mute-toggle) {
   pointer-events: none;
   opacity: 0.55;
+}
+.mute-toggle {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 70;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.mute-toggle:hover,
+.mute-toggle:focus-visible {
+  opacity: 1;
+}
+.mute-toggle.muted {
+  opacity: 0.5;
 }
 .modal-backdrop.replaced {
   z-index: 110;

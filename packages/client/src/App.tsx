@@ -2,6 +2,7 @@ import { useConnection } from "./hooks/useConnection";
 import { Home } from "./components/Home";
 import { Lobby } from "./components/Lobby";
 import { Game } from "./components/game/Game";
+import { MuteButton } from "./components/MuteButton";
 
 export default function App() {
   const conn = useConnection();
@@ -10,6 +11,7 @@ export default function App() {
   return (
     <div className={`app screen-${conn.screen} ${offline ? "offline" : ""}`}>
       {conn.toast && <div className="toast">{conn.toast}</div>}
+      <MuteButton />
       {offline && <div className="banner offline">Connection lost. Reconnecting…</div>}
       {conn.replaced && (
         <div className="modal-backdrop replaced">

@@ -9,6 +9,9 @@ import type {
 } from "@sr/shared";
 import { getCardDef } from "@sr/shared";
 import type { Connection } from "../../hooks/useConnection";
+import { soundForAction } from "../../sound/events";
+import { playSound } from "../../sound/sounds";
+import { useGameSounds } from "../../sound/useGameSounds";
 import { Card } from "../Card";
 import { ChoiceModal } from "../ChoiceModal";
 import { GameOver } from "./GameOver";
@@ -43,6 +46,7 @@ export function Game({ conn, view, room }: Props) {
   const blocked = !myTurn || view.choice !== null;
   const multi = view.players.length > 2;
   const opponents = opponentsFromLeft(view);
+  useGameSounds(view, conn.connected);
 
   // ---------------------------------------------------------------- focus
   // On my turn the focused opponent is my target: the last seat I clicked, else the
@@ -134,6 +138,10 @@ export function Game({ conn, view, room }: Props) {
   }
 
   function act(action: PlayerAction) {
+    // Buttons only offer legal actions, so the sound plays on the click instead of
+    // waiting a network round trip for the server to confirm.
+    const sound = conn.connected ? soundForAction(action) : null;
+    if (sound) playSound(sound);
     void conn.sendAction(action);
   }
 
