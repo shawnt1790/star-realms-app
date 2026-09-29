@@ -138,10 +138,11 @@ export function Game({ conn, view, room }: Props) {
   }
 
   function act(action: PlayerAction) {
-    void conn.sendAction(action).then((res) => {
-      const sound = res.ok ? soundForAction(action) : null;
-      if (sound) playSound(sound);
-    });
+    // Buttons only offer legal actions, so the sound plays on the click instead of
+    // waiting a network round trip for the server to confirm.
+    const sound = conn.connected ? soundForAction(action) : null;
+    if (sound) playSound(sound);
+    void conn.sendAction(action);
   }
 
   function resolve(resolution: ChoiceResolution) {

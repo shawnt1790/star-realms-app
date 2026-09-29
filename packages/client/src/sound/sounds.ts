@@ -80,7 +80,7 @@ export function playSound(name: SoundName) {
   const now = performance.now();
   if (MAJOR.has(name)) lastMajorAt = now;
   else if (now - lastMajorAt < MAJOR_QUIET_MS) return;
-  const start = () => RECIPES[name](ac, out, ac.currentTime + 0.01);
+  const start = () => RECIPES[name](ac, out, ac.currentTime);
   if (ac.state === "running") return start();
   // Browsers may suspend audio in a background tab; once the page has had a click,
   // resuming doesn't need another one.
@@ -126,7 +126,7 @@ function noise(
   out: AudioNode,
   t: number,
   dur: number,
-  opts: { gain?: number; from?: number; to?: number } = {},
+  opts: { gain?: number; from?: number; to?: number; type?: BiquadFilterType } = {},
 ) {
   const buffer = ac.createBuffer(1, Math.ceil(ac.sampleRate * dur), ac.sampleRate);
   const data = buffer.getChannelData(0);
@@ -134,7 +134,7 @@ function noise(
   const src = ac.createBufferSource();
   src.buffer = buffer;
   const filter = ac.createBiquadFilter();
-  filter.type = "lowpass";
+  filter.type = opts.type ?? "lowpass";
   filter.frequency.setValueAtTime(opts.from ?? 3000, t);
   filter.frequency.exponentialRampToValueAtTime(opts.to ?? 200, t + dur);
   const env = ac.createGain();
@@ -155,9 +155,7 @@ const C4 = 261.63,
   E5 = 659.25,
   G5 = 783.99,
   A5 = 880.0,
-  B5 = 987.77,
-  C6 = 1046.5,
-  E6 = 1318.51;
+  C6 = 1046.5;
 
 type Recipe = (ac: AudioContext, out: AudioNode, t: number) => void;
 
@@ -183,10 +181,14 @@ const RECIPES: Record<SoundName, Recipe> = {
     tone(ac, out, t, A3, 0.25, { wave: "sawtooth", gain: 0.08 });
     tone(ac, out, t + 0.2, E3, 0.4, { wave: "sawtooth", gain: 0.08 });
   },
-  // Bought a card: a coin-like blip.
+  // Bought a card: a soft cash-register "ka-ching": a drawer click, then a small bell
+  // (a fundamental plus a bell-like inharmonic overtone).
   buy: (ac, out, t) => {
-    tone(ac, out, t, B5, 0.08, { wave: "square", gain: 0.06 });
-    tone(ac, out, t + 0.07, E6, 0.2, { wave: "square", gain: 0.06 });
+    noise(ac, out, t, 0.035, { gain: 0.1, from: 1600, to: 900, type: "bandpass" });
+    const ching = t + 0.055;
+    tone(ac, out, ching, 2093, 0.4, { gain: 0.06, attack: 0.003 });
+    tone(ac, out, ching, 2637, 0.3, { gain: 0.035, attack: 0.003 });
+    tone(ac, out, ching, 5777, 0.15, { gain: 0.012, attack: 0.003 });
   },
   // Attacked a player: a short laser zap.
   attack: (ac, out, t) => {
