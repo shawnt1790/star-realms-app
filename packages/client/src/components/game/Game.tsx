@@ -46,7 +46,7 @@ export function Game({ conn, view, room }: Props) {
   const blocked = !myTurn || view.choice !== null;
   const multi = view.players.length > 2;
   const opponents = opponentsFromLeft(view);
-  useGameSounds(view, { solo: room.mode === "solo", connected: conn.connected });
+  useGameSounds(view, conn.connected);
 
   // ---------------------------------------------------------------- focus
   // On my turn the focused opponent is my target: the last seat I clicked, else the

@@ -31,54 +31,50 @@ function view(over: Partial<GameView> = {}, seats: Seat[] = [{}, {}]): GameView 
   } as GameView;
 }
 
-const multi = { solo: false };
-
 describe("soundForUpdate", () => {
   it("stays quiet for the first view, a rematch or a reconnect", () => {
-    expect(soundForUpdate(null, view({ current: 0 }), multi)).toBeNull();
-    expect(soundForUpdate(view(), view({ id: "g2", current: 0 }), multi)).toBeNull();
+    expect(soundForUpdate(null, view({ current: 0 }))).toBeNull();
+    expect(soundForUpdate(view(), view({ id: "g2", current: 0 }))).toBeNull();
   });
 
-  it("chimes when my turn starts, except against bots", () => {
-    expect(soundForUpdate(view(), view({ current: 0 }), multi)).toBe("turn");
-    expect(soundForUpdate(view(), view({ current: 0 }), { solo: true })).toBeNull();
-    expect(soundForUpdate(view({ current: 0 }), view({ current: 0, turn: 3 }), multi)).toBeNull();
+  it("chimes when my turn starts, including going first in a new game", () => {
+    expect(soundForUpdate(view(), view({ current: 0 }))).toBe("turn");
+    expect(soundForUpdate(null, view({ current: 0, turn: 1 }))).toBe("turn");
+    expect(soundForUpdate(view(), view({ id: "g2", current: 0, turn: 1 }))).toBe("turn");
+    expect(soundForUpdate(null, view({ current: 1, turn: 1 }))).toBeNull();
+    expect(soundForUpdate(view({ current: 0 }), view({ current: 0, turn: 3 }))).toBeNull();
   });
 
   it("thuds when I take damage", () => {
-    expect(soundForUpdate(view(), view({}, [{ authority: 45 }, {}]), multi)).toBe("hit");
-    expect(soundForUpdate(view(), view({}, [{}, { authority: 45 }]), multi)).toBeNull();
+    expect(soundForUpdate(view(), view({}, [{ authority: 45 }, {}]))).toBe("hit");
+    expect(soundForUpdate(view(), view({}, [{}, { authority: 45 }]))).toBeNull();
   });
 
   it("marks my base being destroyed on someone else's turn, not my own scrapping", () => {
     const before = view({}, [{ bases: ["b1"] }, {}]);
-    expect(soundForUpdate(before, view(), multi)).toBe("baseLost");
+    expect(soundForUpdate(before, view())).toBe("baseLost");
     const mine = view({ current: 0 }, [{ bases: ["b1"] }, {}]);
-    expect(soundForUpdate(mine, view({ current: 0 }), multi)).toBeNull();
+    expect(soundForUpdate(mine, view({ current: 0 }))).toBeNull();
   });
 
   it("pings when I have to choose on another player's turn", () => {
     const choice = { id: "c1" } as GameView["choice"];
-    expect(soundForUpdate(view(), view({ choice }), multi)).toBe("choice");
-    expect(soundForUpdate(view({ choice }), view({ choice }), multi)).toBeNull();
+    expect(soundForUpdate(view(), view({ choice }))).toBe("choice");
+    expect(soundForUpdate(view({ choice }), view({ choice }))).toBeNull();
   });
 
   it("announces eliminations, then victory or defeat once", () => {
     const three: Seat[] = [{}, {}, {}];
     const out: Seat[] = [{}, {}, { eliminated: true }];
-    expect(soundForUpdate(view({}, three), view({ eliminationOrder: [2] }, out), multi)).toBe(
+    expect(soundForUpdate(view({}, three), view({ eliminationOrder: [2] }, out))).toBe(
       "eliminated",
     );
     const meOut: Seat[] = [{ eliminated: true }, {}, {}];
-    expect(soundForUpdate(view({}, three), view({ eliminationOrder: [0] }, meOut), multi)).toBe(
-      "defeat",
-    );
+    expect(soundForUpdate(view({}, three), view({ eliminationOrder: [0] }, meOut))).toBe("defeat");
     // Knocked out earlier: no second defeat when the game ends.
-    expect(soundForUpdate(view({}, meOut), view({ winner: 1 }, meOut), multi)).toBeNull();
-    expect(soundForUpdate(view(), view({ winner: 0 }), multi)).toBe("victory");
-    expect(soundForUpdate(view(), view({ winner: 1 }, [{ authority: 0 }, {}]), multi)).toBe(
-      "defeat",
-    );
+    expect(soundForUpdate(view({}, meOut), view({ winner: 1 }, meOut))).toBeNull();
+    expect(soundForUpdate(view(), view({ winner: 0 }))).toBe("victory");
+    expect(soundForUpdate(view(), view({ winner: 1 }, [{ authority: 0 }, {}]))).toBe("defeat");
   });
 });
 

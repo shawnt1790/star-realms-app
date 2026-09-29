@@ -9,8 +9,7 @@ const BASE_TITLE = typeof document === "undefined" ? "" : document.title;
  * Plays sounds for what changed between game views, and marks the tab title while
  * the game is waiting on this player in a background tab.
  */
-export function useGameSounds(view: GameView, opts: { solo: boolean; connected: boolean }) {
-  const { solo, connected } = opts;
+export function useGameSounds(view: GameView, connected: boolean) {
   const prevRef = useRef<GameView | null>(null);
   /** The view on screen when the connection dropped; it's stale until a new one arrives. */
   const staleRef = useRef<GameView | null>(null);
@@ -23,10 +22,10 @@ export function useGameSounds(view: GameView, opts: { solo: boolean; connected: 
     }
     if (view === staleRef.current) return;
     staleRef.current = null;
-    const sound = soundForUpdate(prevRef.current, view, { solo });
+    const sound = soundForUpdate(prevRef.current, view);
     prevRef.current = view;
     if (sound) playSound(sound);
-  }, [view, solo, connected]);
+  }, [view, connected]);
 
   const waiting =
     view.winner === null
